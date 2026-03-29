@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="brandGradient" x1="12" y1="10" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6C83FF" />
+      <stop offset="1" stop-color="#4F6EF7" />
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="48" height="48" rx="14" fill="url(#brandGradient)" />
+  <path
+    d="M18 23.5H46C48.2091 23.5 50 25.2909 50 27.5V37.5C50 39.7091 48.2091 41.5 46 41.5H18C15.7909 41.5 14 39.7091 14 37.5V27.5C14 25.2909 15.7909 23.5 18 23.5Z"
+    fill="white"
+    fill-opacity="0.96"
+  />
+  <path
+    d="M18 28L32 37.5L46 28"
+    stroke="#4F6EF7"
+    stroke-width="3.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="46.5" cy="18.5" r="6.5" fill="#22C55E" />
+  <path d="M46.5 15.5V21.5M43.5 18.5H49.5" stroke="white" stroke-width="2" stroke-linecap="round" />
+</svg>

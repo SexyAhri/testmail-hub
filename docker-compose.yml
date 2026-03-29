@@ -1,0 +1,42 @@
+services:
+  temp-mail-console:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: temp-mail-console
+    env_file:
+      - .dev.vars
+    environment:
+      APP_MODE: dev
+      HOST: 0.0.0.0
+      PORT: 4173
+    ports:
+      - "4173:4173"
+    volumes:
+      - wrangler_state:/app/.wrangler
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4173 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: unless-stopped
+
+  temp-mail-console-deploy:
+    profiles: ["deploy"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: temp-mail-console-deploy
+    env_file:
+      - .dev.vars
+    environment:
+      APP_MODE: deploy
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      RUN_CHECKS_BEFORE_DEPLOY: "true"
+    volumes:
+      - wrangler_state:/app/.wrangler
+    restart: "no"
+
+volumes:
+  wrangler_state:

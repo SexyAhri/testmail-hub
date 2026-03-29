@@ -1,0 +1,30 @@
+ADMIN_TOKEN=<set-admin-token>
+API_TOKEN=<set-api-token>
+# Optional: Wrangler deploy auth in Docker / CI. Runtime code will ignore this value.
+CLOUDFLARE_ACCOUNT_ID=
+# Optional: forward original emails to a verified Email Routing destination address.
+FORWARD_TO=
+# Optional: independent session signing secret for admin login cookies.
+SESSION_SECRET=<set-session-secret>
+# Optional: single primary mailbox domain used by mailbox generation and Cloudflare route sync.
+MAILBOX_DOMAIN=
+# Optional: Cloudflare API token used to sync Email Routing mailbox rules into local assets.
+CLOUDFLARE_API_TOKEN=
+# Optional: Cloudflare zone id for the mailbox domain.
+CLOUDFLARE_ZONE_ID=
+# Optional: worker script used by Email Routing rules (defaults to temp-email-worker).
+CLOUDFLARE_EMAIL_WORKER=temp-email-worker
+# Optional: comma-separated browser origins allowed to call /api/* cross-origin.
+ALLOWED_API_ORIGINS=
+# Optional: receive error events via a webhook.
+ERROR_WEBHOOK_URL=
+# Optional: Resend API key used by the visual outbound email center.
+RESEND_API_KEY=
+# Optional: verified sender domain for outbound email.
+RESEND_FROM_DOMAIN=
+# Optional: default sender display name shown in the outbound email center.
+RESEND_DEFAULT_FROM_NAME=
+# Optional: default sender address shown in the outbound email center.
+RESEND_DEFAULT_FROM=
+# Optional: default reply-to used by outbound email.
+RESEND_DEFAULT_REPLY_TO=

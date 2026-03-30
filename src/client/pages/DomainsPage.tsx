@@ -7,7 +7,7 @@ import {
   SafetyCertificateOutlined,
   SyncOutlined,
 } from "@ant-design/icons";
-import { Alert, App, Button, Col, Form, Input, Popconfirm, Row, Select, Space, Switch, Tag } from "antd";
+import { Alert, App, Button, Col, Form, Input, Popconfirm, Row, Select, Space, Switch, Tabs, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo, useState } from "react";
 
@@ -723,7 +723,7 @@ export default function DomainsPage({ onDomainsChanged, onUnauthorized }: Domain
   ];
 
   return (
-    <div>
+    <div className="page-tab-stack">
       <PageHeader
         title="域名资产"
         subtitle="统一管理接入域名、Cloudflare 路由配置，以及项目/环境级工作空间绑定。"
@@ -743,165 +743,238 @@ export default function DomainsPage({ onDomainsChanged, onUnauthorized }: Domain
         )}
       />
 
-      <MetricGrid>
-        <MetricCard
-          title="域名资产"
-          value={items.length}
-          icon={<GlobalOutlined />}
-          percent={Math.min(100, items.length * 10)}
-          color="#1677ff"
-        />
-        <MetricCard
-          title="已启用"
-          value={enabledCount}
-          icon={<SafetyCertificateOutlined />}
-          percent={items.length ? (enabledCount / items.length) * 100 : 0}
-          color="#52c41a"
-        />
-        <MetricCard
-          title="Cloudflare 已接入"
-          value={configuredCount}
-          icon={<CloudServerOutlined />}
-          percent={buildRatio(configuredCount, statusItems.length || items.length)}
-          color="#fa8c16"
-        />
-        <MetricCard
-          title="健康域名"
-          value={healthyCount}
-          icon={<SafetyCertificateOutlined />}
-          percent={buildRatio(healthyCount, statusItems.length)}
-          color="#2f54eb"
-        />
-        <MetricCard
-          title="托管邮箱"
-          value={formatMetricValue(totalManagedMailboxes)}
-          icon={<MailOutlined />}
-          percent={buildRatio(totalManagedMailboxes, totalObservedMailboxes || totalManagedMailboxes)}
-          color="#13c2c2"
-        />
-        <MetricCard
-          title="策略待同步"
-          value={driftCount}
-          icon={<SyncOutlined />}
-          percent={buildRatio(driftCount, statusItems.length)}
-          color="#722ed1"
-        />
-      </MetricGrid>
+      <Tabs
+        className="page-section-tabs"
+        items={[
+          {
+            key: "overview",
+            label: "概览",
+            children: (
+              <div className="page-scroll-panel">
+                <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                  <MetricGrid minItemWidth={220} style={{ marginBottom: 0 }}>
+                    <MetricCard
+                      title="域名资产"
+                      value={items.length}
+                      icon={<GlobalOutlined />}
+                      percent={Math.min(100, items.length * 10)}
+                      color="#1677ff"
+                    />
+                    <MetricCard
+                      title="已启用"
+                      value={enabledCount}
+                      icon={<SafetyCertificateOutlined />}
+                      percent={items.length ? (enabledCount / items.length) * 100 : 0}
+                      color="#52c41a"
+                    />
+                    <MetricCard
+                      title="Cloudflare 已接入"
+                      value={configuredCount}
+                      icon={<CloudServerOutlined />}
+                      percent={buildRatio(configuredCount, statusItems.length || items.length)}
+                      color="#fa8c16"
+                    />
+                    <MetricCard
+                      title="健康域名"
+                      value={healthyCount}
+                      icon={<SafetyCertificateOutlined />}
+                      percent={buildRatio(healthyCount, statusItems.length)}
+                      color="#2f54eb"
+                    />
+                    <MetricCard
+                      title="托管邮箱"
+                      value={formatMetricValue(totalManagedMailboxes)}
+                      icon={<MailOutlined />}
+                      percent={buildRatio(
+                        totalManagedMailboxes,
+                        totalObservedMailboxes || totalManagedMailboxes,
+                      )}
+                      color="#13c2c2"
+                    />
+                    <MetricCard
+                      title="策略待同步"
+                      value={driftCount}
+                      icon={<SyncOutlined />}
+                      percent={buildRatio(driftCount, statusItems.length)}
+                      color="#722ed1"
+                    />
+                  </MetricGrid>
 
-      {items.length === 0 && statusItems.length > 0 ? (
-        <Alert
-          style={{ marginTop: 16, marginBottom: 16 }}
-          type="info"
-          showIcon
-          message="当前尚未录入域名资产"
-          description="系统已经通过环境变量或历史收件识别到域名，你可以先补录到域名资产中心，后续才能继续做项目绑定、Cloudflare 状态跟踪和 Catch-all 策略管理。"
-        />
-      ) : null}
+                  {items.length === 0 && statusItems.length > 0 ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="当前尚未录入域名资产"
+                      description="系统已经通过环境变量或历史收件识别到域名，你可以先补录到域名资产中心，后续才能继续做项目绑定、Cloudflare 状态跟踪和 Catch-all 策略管理。"
+                    />
+                  ) : null}
 
-      {driftCount > 0 ? (
-        <Alert
-          style={{ marginTop: 16, marginBottom: 16 }}
-          type="warning"
-          showIcon
-          message="检测到待同步的 Catch-all 策略"
-          description="本地配置已经保存，但 Cloudflare 侧还没有完全一致。你可以在配置表里按行同步，或者选中多条后批量同步。"
-        />
-      ) : null}
+                  <Row gutter={[16, 16]} align="top">
+                    <Col xs={24} xxl={16}>
+                      <Space direction="vertical" size={16} style={{ display: "flex" }}>
+                        <MetricChart
+                          title="域名收件量排行"
+                          data={emailVolumeChartData}
+                          color="#1677ff"
+                          emptyText="暂无域名收件统计"
+                          height={200}
+                        />
 
-      {errorCount > 0 ? (
-        <Alert
-          style={{ marginTop: 16, marginBottom: 16 }}
-          type="error"
-          showIcon
-          message="检测到 Cloudflare 接入异常"
-          description="部分域名无法正确读取 Cloudflare 路由或 Catch-all 状态，请检查对应域名的 Zone ID、API Token 和 Email Worker 配置。"
-        />
-      ) : null}
+                        <Row gutter={[16, 16]}>
+                          <Col xs={24} xl={12}>
+                            <MetricChart
+                              title="托管邮箱数排行"
+                              data={managedMailboxChartData}
+                              color="#52c41a"
+                              emptyText="暂无托管邮箱统计"
+                              height={200}
+                            />
+                          </Col>
+                          <Col xs={24} xl={12}>
+                            <MetricChart
+                              title="路由覆盖排行"
+                              data={routeCoverageChartData}
+                              color="#fa8c16"
+                              emptyText="暂无路由覆盖统计"
+                              height={200}
+                            />
+                          </Col>
+                        </Row>
+                      </Space>
+                    </Col>
+                    <Col xs={24} xxl={8}>
+                      <Space direction="vertical" size={16} style={{ display: "flex" }}>
+                        <InfoCard
+                          title="资产分布"
+                          icon={<GlobalOutlined />}
+                          color="#1677ff"
+                          items={assetOverviewItems}
+                        />
+                        <InfoCard
+                          title="接入概览"
+                          icon={<CloudServerOutlined />}
+                          color="#fa8c16"
+                          items={cloudflareOverviewItems}
+                        />
+                      </Space>
+                    </Col>
+                  </Row>
+                </Space>
+              </div>
+            ),
+          },
+          {
+            key: "status",
+            label: `运行状态 (${statusItems.length})`,
+            children: (
+              <div className="page-tab-stack">
+                <MetricGrid minItemWidth={220}>
+                  <MetricCard
+                    title="健康域名"
+                    value={healthyCount}
+                    icon={<SafetyCertificateOutlined />}
+                    percent={buildRatio(healthyCount, statusItems.length)}
+                    color="#2f54eb"
+                  />
+                  <MetricCard
+                    title="Cloudflare 已接入"
+                    value={configuredCount}
+                    icon={<CloudServerOutlined />}
+                    percent={buildRatio(configuredCount, statusItems.length || items.length)}
+                    color="#fa8c16"
+                  />
+                  <MetricCard
+                    title="策略待同步"
+                    value={driftCount}
+                    icon={<SyncOutlined />}
+                    percent={buildRatio(driftCount, statusItems.length)}
+                    color="#722ed1"
+                  />
+                  <MetricCard
+                    title="接入异常"
+                    value={errorCount}
+                    icon={<CloudServerOutlined />}
+                    percent={buildRatio(errorCount, statusItems.length)}
+                    color="#cf1322"
+                  />
+                </MetricGrid>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} xl={16}>
-          <Row gutter={[16, 16]}>
-            <Col span={24}>
-              <MetricChart
-                title="域名收件量排行"
-                data={emailVolumeChartData}
-                color="#1677ff"
-                emptyText="暂无域名收件统计"
-                height={220}
-              />
-            </Col>
-            <Col xs={24} lg={12}>
-              <MetricChart
-                title="托管邮箱数排行"
-                data={managedMailboxChartData}
-                color="#52c41a"
-                emptyText="暂无托管邮箱统计"
-                height={220}
-              />
-            </Col>
-            <Col xs={24} lg={12}>
-              <MetricChart
-                title="路由覆盖排行"
-                data={routeCoverageChartData}
-                color="#fa8c16"
-                emptyText="暂无路由覆盖统计"
-                height={220}
-              />
-            </Col>
-          </Row>
-        </Col>
-        <Col xs={24} xl={8}>
-          <Space direction="vertical" size={16} style={{ display: "flex" }}>
-            <InfoCard
-              title="资产分布"
-              icon={<GlobalOutlined />}
-              color="#1677ff"
-              items={assetOverviewItems}
-            />
-            <InfoCard
-              title="接入概览"
-              icon={<CloudServerOutlined />}
-              color="#fa8c16"
-              items={cloudflareOverviewItems}
-            />
-          </Space>
-        </Col>
-      </Row>
+                <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                  {driftCount > 0 ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="检测到待同步的 Catch-all 策略"
+                      description="本地配置已经保存，但 Cloudflare 侧还没有完全一致。你可以在配置表里按行同步，或者选中多条后批量同步。"
+                    />
+                  ) : null}
 
-      <DataTable
-        cardTitle="域名运行状态"
-        columns={statusColumns}
-        dataSource={statusItems}
-        loading={loading}
-        rowKey="domain"
-        showPagination={false}
-        style={{ marginBottom: 16 }}
-      />
+                  {errorCount > 0 ? (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message="检测到 Cloudflare 接入异常"
+                      description="部分域名无法正确读取 Cloudflare 路由或 Catch-all 状态，请检查对应域名的 Zone ID、API Token 和 Email Worker 配置。"
+                    />
+                  ) : null}
+                </Space>
 
-      <DataTable
-        cardTitle="域名配置管理"
-        cardExtra={<Button onClick={openCreate}>新增域名</Button>}
-        cardToolbar={(
-          <BatchActionsBar selectedCount={selectedItems.length} onClear={clearSelection}>
-            <Button onClick={() => void handleBatchToggle(true)}>批量启用</Button>
-            <Button onClick={() => void handleBatchToggle(false)}>批量停用</Button>
-            <Button icon={<SyncOutlined />} onClick={() => void handleBatchSyncCatchAll()}>
-              批量同步 Catch-all
-            </Button>
-            <Popconfirm
-              title={`确定删除选中的 ${selectedItems.length} 个域名吗？`}
-              onConfirm={() => void handleBatchDelete()}
-            >
-              <Button danger>批量删除</Button>
-            </Popconfirm>
-          </BatchActionsBar>
-        )}
-        columns={configColumns}
-        dataSource={items}
-        loading={loading}
-        rowKey="id"
-        rowSelection={rowSelection}
-        pageSize={10}
+                <DataTable
+                  cardTitle="域名运行状态"
+                  columns={statusColumns}
+                  dataSource={statusItems}
+                  loading={loading}
+                  rowKey="domain"
+                  showPagination={false}
+                  scroll={{ x: "max-content", y: 420 }}
+                  style={{ marginBottom: 0 }}
+                />
+              </div>
+            ),
+          },
+          {
+            key: "config",
+            label: `配置管理 (${items.length})`,
+            children: (
+              <div className="page-tab-stack">
+                <Alert
+                  type="info"
+                  showIcon
+                  message="域名资产配置"
+                  description="这里统一管理域名归属、Cloudflare Zone、邮件 Worker、Catch-all 策略，以及项目 / 环境绑定关系。"
+                />
+
+                <DataTable
+                  cardTitle="域名配置管理"
+                  cardExtra={<Button onClick={openCreate}>新增域名</Button>}
+                  cardToolbar={(
+                    <BatchActionsBar selectedCount={selectedItems.length} onClear={clearSelection}>
+                      <Button onClick={() => void handleBatchToggle(true)}>批量启用</Button>
+                      <Button onClick={() => void handleBatchToggle(false)}>批量停用</Button>
+                      <Button icon={<SyncOutlined />} onClick={() => void handleBatchSyncCatchAll()}>
+                        批量同步 Catch-all
+                      </Button>
+                      <Popconfirm
+                        title={`确定删除选中的 ${selectedItems.length} 个域名吗？`}
+                        onConfirm={() => void handleBatchDelete()}
+                      >
+                        <Button danger>批量删除</Button>
+                      </Popconfirm>
+                    </BatchActionsBar>
+                  )}
+                  columns={configColumns}
+                  dataSource={items}
+                  loading={loading}
+                  rowKey="id"
+                  rowSelection={rowSelection}
+                  pageSize={8}
+                  scroll={{ x: "max-content", y: 440 }}
+                  style={{ marginBottom: 0 }}
+                />
+              </div>
+            ),
+          },
+        ]}
       />
 
       <FormDrawer

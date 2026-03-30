@@ -101,6 +101,35 @@ body {
 
 .page-content {
   animation: slideIn 0.3s ease-out forwards;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.page-tab-stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.page-section-tabs .ant-tabs-nav {
+  margin-bottom: 16px;
+}
+
+.page-section-tabs .ant-tabs-content-holder {
+  min-width: 0;
+}
+
+.page-section-tabs .ant-tabs-content,
+.page-section-tabs .ant-tabs-tabpane {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.page-scroll-panel {
+  max-height: calc(100vh - 250px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
 }
 
 .page-content .ant-card {
@@ -288,5 +317,13 @@ body {
 
   .login-feature-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .page-scroll-panel {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 }

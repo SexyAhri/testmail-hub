@@ -40,6 +40,8 @@ jobs:
         run: npm run build
 
       - name: Export remote D1 backup
+        id: d1_backup
+        continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -47,13 +49,18 @@ jobs:
           mkdir -p backups
           BACKUP_FILE="backups/d1-temp-email-db-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sql"
           npx wrangler d1 export temp-email-db --remote --output "$BACKUP_FILE"
-          echo "BACKUP_FILE=$BACKUP_FILE" >> "$GITHUB_ENV"
+          echo "backup_file=$BACKUP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Warn when D1 backup is skipped
+        if: steps.d1_backup.outcome != 'success'
+        run: echo "::warning::Remote D1 backup failed, but deployment will continue. Check CLOUDFLARE_API_TOKEN permissions if you want automatic backup artifacts."
 
       - name: Upload D1 backup artifact
+        if: steps.d1_backup.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: d1-backup-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.BACKUP_FILE }}
+          path: ${{ steps.d1_backup.outputs.backup_file }}
           retention-days: 7
 
       - name: Sync Worker secrets and variables

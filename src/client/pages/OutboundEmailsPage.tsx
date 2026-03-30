@@ -1261,12 +1261,12 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
         </Col>
         <Col xs={24} xl={8}>
           <Form.Item label="发件人名称" name="from_name" rules={[{ required: true, message: "请输入发件人名称" }]}>
-            <Input placeholder="例如：TempMail Console" />
+            <Input placeholder="例如：TestMail Hub" />
           </Form.Item>
         </Col>
         <Col xs={24} xl={8}>
           <Form.Item label="发件地址" name="from_address" rules={[{ required: true, message: "请输入发件地址" }]}>
-            <Input placeholder="例如：TempMail@vixenahri.cn" />
+            <Input placeholder="例如：TestMail@vixenahri.cn" />
           </Form.Item>
         </Col>
         <Col xs={24} xl={8}>

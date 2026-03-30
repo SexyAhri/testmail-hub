@@ -5,7 +5,16 @@ import {
   MAX_MAILBOX_TAG_LENGTH,
   MAX_MAILBOX_TAGS,
 } from "./constants";
-import type { ExportRow, JsonBodyResult, JsonValue, RuleMatch } from "../server/types";
+import type {
+  EmailExtractionResult,
+  ExportRow,
+  ExtractedEmailLink,
+  ExtractedLinkKind,
+  JsonBodyResult,
+  JsonValue,
+  RuleMatch,
+  RuleMatchInsight,
+} from "../server/types";
 
 export function clampPage(value: string | null | undefined): number {
   const page = Number(value);
@@ -59,6 +68,17 @@ export function jsonError(message: string, status = 400, detail?: JsonValue): Re
 
 export function normalizeEmailAddress(value: unknown): string {
   return String(value || "").trim().toLowerCase();
+}
+
+export function slugifyIdentifier(value: unknown, fallback = "item"): string {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+
+  return normalized || fallback;
 }
 
 export function isValidEmailAddress(value: unknown): boolean {
@@ -115,14 +135,110 @@ export function stripHtml(html: string): string {
 }
 
 const VERIFICATION_KEYWORD_PATTERN =
-  /(?:\u9a8c\u8bc1\u7801|\u6821\u9a8c\u7801|\u52a8\u6001\u7801|\u786e\u8ba4\u7801|\u63d0\u53d6\u7801|verification code|security code|passcode|one[-\s]?time code|otp|auth code|login code)/i;
+  /(?:验证码|校验码|动态码|确认码|提取码|安全码|短信码|登录码|認證碼|驗證碼|認証コード|ワンタイム|verification code|security code|passcode|one[-\s]?time code|otp|auth(?:entication)? code|login code|confirmation code)/i;
 
 const CONTEXTUAL_CODE_PATTERNS = [
-  /(?:\u9a8c\u8bc1\u7801|\u6821\u9a8c\u7801|\u52a8\u6001\u7801|\u786e\u8ba4\u7801|\u63d0\u53d6\u7801|verification code|security code|passcode|one[-\s]?time code|otp|auth code|login code)(?:\s*(?:is|:|\uff1a|\u4e3a|\u662f|=|-))*\s*([A-Z0-9][A-Z0-9\s-]{2,12}[A-Z0-9])/i,
-  /(?:code|otp)(?:\s*(?:is|:|\uff1a|=|-))*\s*([A-Z0-9][A-Z0-9\s-]{2,12}[A-Z0-9])/i,
+  /(?:验证码|校验码|动态码|确认码|提取码|安全码|短信码|登录码|認證碼|驗證碼|認証コード|ワンタイム|verification code|security code|passcode|one[-\s]?time code|otp|auth(?:entication)? code|login code|confirmation code)(?:\s*(?:is|are|:|：|为|是|=|-))*\s*([A-Z0-9][A-Z0-9\s-]{2,14}[A-Z0-9])/gi,
+  /(?:code|otp|passcode)(?:\s*(?:is|are|:|：|=|-))*\s*([A-Z0-9][A-Z0-9\s-]{2,14}[A-Z0-9])/gi,
 ];
 
-const GENERIC_CONTEXT_CODE_PATTERN = /[A-Z0-9][A-Z0-9\s-]{2,12}[A-Z0-9]/gi;
+const GENERIC_CONTEXT_CODE_PATTERN = /\b[A-Z0-9][A-Z0-9\s-]{2,14}[A-Z0-9]\b/gi;
+const GENERIC_NUMERIC_CODE_PATTERN = /\b\d{4,8}\b/g;
+const GENERIC_ALPHA_NUMERIC_CODE_PATTERN = /\b[A-Z0-9]{4,10}\b/gi;
+const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+/gi;
+const HREF_PATTERN = /href\s*=\s*["']([^"']+)["']/gi;
+const SCOREABLE_LINK_PATTERN = /(?:token|code|otp|auth|login|signin|verify|confirm|activate|reset|invite|magic|session|password)/i;
+
+type EmailExtractionInput = {
+  fromAddress?: unknown;
+  htmlBody?: unknown;
+  preview?: unknown;
+  results?: RuleMatch[];
+  subject?: unknown;
+  textBody?: unknown;
+};
+
+const LINK_CLASSIFIERS: Array<{ kind: ExtractedLinkKind; label: string; patterns: RegExp[]; score: number }> = [
+  {
+    kind: "verification",
+    label: "验证链接",
+    patterns: [/verify/i, /verification/i, /confirm/i, /activate/i, /validate/i, /验证码/i, /校验/i, /确认/i, /激活/i],
+    score: 78,
+  },
+  {
+    kind: "magic_link",
+    label: "魔法链接",
+    patterns: [/magic/i, /passwordless/i, /one[-\s]?tap/i, /instant login/i, /直接登录/i, /免密/i],
+    score: 76,
+  },
+  {
+    kind: "login",
+    label: "登录链接",
+    patterns: [/login/i, /log[-\s]?in/i, /signin/i, /sign[-\s]?in/i, /oauth/i, /authorize/i, /approve/i, /continue/i, /登录/i, /登入/i],
+    score: 68,
+  },
+  {
+    kind: "reset_password",
+    label: "重置密码",
+    patterns: [/reset/i, /password/i, /recover/i, /forgot/i, /重置/i, /找回/i, /修改密码/i],
+    score: 72,
+  },
+  {
+    kind: "invitation",
+    label: "邀请链接",
+    patterns: [/invite/i, /invitation/i, /join/i, /workspace/i, /团队邀请/i, /加入/i],
+    score: 58,
+  },
+  {
+    kind: "action",
+    label: "操作链接",
+    patterns: [/review/i, /open/i, /view/i, /manage/i, /track/i, /查看/i, /打开/i, /处理/i],
+    score: 42,
+  },
+];
+
+const PLATFORM_MATCHERS: Array<{ domains: string[]; keywords: RegExp[]; label: string; slug: string }> = [
+  { slug: "github", label: "GitHub", domains: ["github.com"], keywords: [/github/i, /copilot/i] },
+  { slug: "google", label: "Google", domains: ["google.com", "googlemail.com", "gmail.com"], keywords: [/google/i, /gmail/i] },
+  { slug: "apple", label: "Apple", domains: ["apple.com", "icloud.com"], keywords: [/apple/i, /icloud/i, /apple id/i] },
+  { slug: "paypal", label: "PayPal", domains: ["paypal.com"], keywords: [/paypal/i] },
+  { slug: "steam", label: "Steam", domains: ["steampowered.com", "steamcommunity.com"], keywords: [/steam/i, /steampowered/i] },
+  { slug: "discord", label: "Discord", domains: ["discord.com", "discordapp.com"], keywords: [/discord/i] },
+  { slug: "microsoft", label: "Microsoft", domains: ["microsoft.com", "live.com", "outlook.com"], keywords: [/microsoft/i, /outlook/i, /live\.com/i] },
+  { slug: "amazon", label: "Amazon", domains: ["amazon.com", "amazonaws.com"], keywords: [/amazon/i, /aws/i] },
+  { slug: "notion", label: "Notion", domains: ["notion.so", "notion.com"], keywords: [/notion/i] },
+  { slug: "slack", label: "Slack", domains: ["slack.com"], keywords: [/slack/i] },
+  { slug: "openai", label: "OpenAI", domains: ["openai.com"], keywords: [/openai/i, /chatgpt/i] },
+  { slug: "figma", label: "Figma", domains: ["figma.com"], keywords: [/figma/i] },
+  { slug: "dropbox", label: "Dropbox", domains: ["dropbox.com"], keywords: [/dropbox/i] },
+  { slug: "linkedin", label: "LinkedIn", domains: ["linkedin.com"], keywords: [/linkedin/i] },
+  { slug: "meta", label: "Meta", domains: ["facebookmail.com", "meta.com", "facebook.com"], keywords: [/facebook/i, /meta/i, /instagram/i] },
+  { slug: "x", label: "X", domains: ["x.com", "twitter.com"], keywords: [/twitter/i, /x\.com/i] },
+  { slug: "telegram", label: "Telegram", domains: ["telegram.org", "t.me"], keywords: [/telegram/i] },
+];
+
+function cloneRegExp(pattern: RegExp): RegExp {
+  return new RegExp(pattern.source, pattern.flags);
+}
+
+function decodeHtmlEntities(value: string): string {
+  return String(value || "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#39;/gi, "'")
+    .replace(/&quot;/gi, '"');
+}
+
+function cleanExtractedUrl(value: string): string {
+  return decodeHtmlEntities(String(value || ""))
+    .trim()
+    .replace(/[),.;!?]+$/g, "");
+}
+
+function isLikelyAssetUrl(url: string): boolean {
+  return /\.(?:png|jpe?g|gif|svg|webp|ico|css|js|woff2?|ttf|map)(?:$|\?)/i.test(url);
+}
 
 function normalizeVerificationCodeCandidate(value: unknown): string | null {
   let compact = String(value || "")
@@ -135,50 +251,68 @@ function normalizeVerificationCodeCandidate(value: unknown): string | null {
   }
 
   const canonical = compact.toUpperCase();
-  if (!/^[A-Z0-9]{4,8}$/.test(canonical)) return null;
+  if (!/^[A-Z0-9]{4,10}$/.test(canonical)) return null;
   if (!/\d/.test(canonical)) return null;
   if (/^(19|20)\d{2}$/.test(canonical)) return null;
 
   return compact;
 }
 
-function uniqueVerificationCodes(values: Array<string | null>): string[] {
-  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
+function addVerificationCandidate(candidates: Map<string, number>, value: unknown, score: number): void {
+  const code = normalizeVerificationCodeCandidate(value);
+  if (!code) return;
+
+  const normalizedScore =
+    score
+    + (/[A-Za-z]/.test(code) && /\d/.test(code) ? 8 : 0)
+    + (/^\d{6}$/.test(code) ? 6 : 0)
+    + (code.length >= 5 && code.length <= 8 ? 4 : 0);
+
+  candidates.set(code, Math.max(candidates.get(code) || 0, normalizedScore));
 }
 
-function chooseVerificationCodeCandidate(candidates: string[]): string | null {
-  if (candidates.length === 0) return null;
+function selectVerificationCandidate(candidates: Map<string, number>): string | null {
+  return Array.from(candidates.entries())
+    .sort((left, right) => {
+      if (right[1] !== left[1]) return right[1] - left[1];
 
-  const mixed = candidates.find(item => /[A-Za-z]/.test(item) && /\d/.test(item));
-  if (mixed) return mixed;
+      const leftMixed = /[A-Za-z]/.test(left[0]) && /\d/.test(left[0]);
+      const rightMixed = /[A-Za-z]/.test(right[0]) && /\d/.test(right[0]);
+      if (leftMixed !== rightMixed) return rightMixed ? 1 : -1;
 
-  const numeric = candidates.find(item => /^\d{4,8}$/.test(item));
-  if (numeric) return numeric;
+      const leftPreferredLength = Math.abs(left[0].length - 6);
+      const rightPreferredLength = Math.abs(right[0].length - 6);
+      if (leftPreferredLength !== rightPreferredLength) return leftPreferredLength - rightPreferredLength;
 
-  return candidates[0] || null;
+      return left[0].localeCompare(right[0]);
+    })
+    .at(0)?.[0] || null;
 }
 
-function extractVerificationCodeFromMatches(matches: RuleMatch[] = []): string | null {
-  const prioritized = uniqueVerificationCodes(
-    matches
-      .filter(item => VERIFICATION_KEYWORD_PATTERN.test(String(item.remark || "")))
-      .map(item => normalizeVerificationCodeCandidate(item.value)),
-  );
-
-  const prioritizedNumeric = prioritized.filter(item => /^\d{4,8}$/.test(item));
-  if (prioritizedNumeric.length > 0) return prioritizedNumeric[0];
-  if (prioritized.length === 1) return prioritized[0];
-
-  const generic = uniqueVerificationCodes(matches.map(item => normalizeVerificationCodeCandidate(item.value)));
-  const genericNumeric = generic.filter(item => /^\d{4,8}$/.test(item));
-  if (genericNumeric.length === 1) return genericNumeric[0];
-  if (generic.length === 1) return generic[0];
-
-  return null;
+function collectVerificationCandidatesFromMatches(matches: RuleMatch[] = []): Map<string, number> {
+  const candidates = new Map<string, number>();
+  for (const item of matches) {
+    addVerificationCandidate(
+      candidates,
+      item.value,
+      VERIFICATION_KEYWORD_PATTERN.test(String(item.remark || "")) ? 92 : 56,
+    );
+  }
+  return candidates;
 }
 
-function extractVerificationCodeFromKeywordSegments(sources: string[]): string | null {
-  for (const source of sources) {
+function collectVerificationCandidatesFromSources(sources: string[]): Map<string, number> {
+  const candidates = new Map<string, number>();
+
+  for (const [sourceIndex, source] of sources.entries()) {
+    const sourceScoreBoost = sourceIndex === 0 ? 6 : sourceIndex === 1 ? 12 : 0;
+
+    for (const pattern of CONTEXTUAL_CODE_PATTERNS) {
+      for (const match of source.matchAll(cloneRegExp(pattern))) {
+        addVerificationCandidate(candidates, match[1], 86 + sourceScoreBoost);
+      }
+    }
+
     const segments = String(source || "")
       .split(/[\r\n]+|[。！？!?]+/)
       .map(item => item.trim())
@@ -187,32 +321,161 @@ function extractVerificationCodeFromKeywordSegments(sources: string[]): string |
     for (const segment of segments) {
       if (!VERIFICATION_KEYWORD_PATTERN.test(segment)) continue;
 
-      for (const pattern of CONTEXTUAL_CODE_PATTERNS) {
-        const matched = normalizeVerificationCodeCandidate(segment.match(pattern)?.[1]);
-        if (matched) return matched;
+      for (const candidate of segment.matchAll(cloneRegExp(GENERIC_CONTEXT_CODE_PATTERN))) {
+        addVerificationCandidate(candidates, candidate[0], 74 + sourceScoreBoost);
       }
 
-      const candidates = uniqueVerificationCodes(
-        (segment.match(GENERIC_CONTEXT_CODE_PATTERN) || []).map(candidate => normalizeVerificationCodeCandidate(candidate)),
-      );
-      const selected = chooseVerificationCodeCandidate(candidates);
-      if (selected) return selected;
+      for (const numericCandidate of segment.matchAll(cloneRegExp(GENERIC_NUMERIC_CODE_PATTERN))) {
+        addVerificationCandidate(candidates, numericCandidate[0], 64 + sourceScoreBoost);
+      }
     }
   }
 
-  return null;
+  if (!sources.some(source => VERIFICATION_KEYWORD_PATTERN.test(source))) {
+    return candidates;
+  }
+
+  for (const source of sources) {
+    for (const candidate of source.matchAll(cloneRegExp(GENERIC_NUMERIC_CODE_PATTERN))) {
+      addVerificationCandidate(candidates, candidate[0], 40);
+    }
+    for (const candidate of source.matchAll(cloneRegExp(GENERIC_ALPHA_NUMERIC_CODE_PATTERN))) {
+      addVerificationCandidate(candidates, candidate[0], 34);
+    }
+  }
+
+  return candidates;
 }
 
-export function extractVerificationCode(input: {
-  htmlBody?: unknown;
-  preview?: unknown;
-  results?: RuleMatch[];
-  subject?: unknown;
-  textBody?: unknown;
-}): string | null {
-  const byMatches = extractVerificationCodeFromMatches(input.results || []);
-  if (byMatches) return byMatches;
+function extractRelevantLinks(input: EmailExtractionInput): ExtractedEmailLink[] {
+  const candidates = new Map<string, string[]>();
+  const textSources = [
+    String(input.subject || ""),
+    String(input.textBody || ""),
+    String(input.preview || ""),
+    stripHtml(String(input.htmlBody || "")),
+  ].filter(Boolean);
 
+  const addLinkCandidate = (rawUrl: string, context: string) => {
+    const url = cleanExtractedUrl(rawUrl);
+    if (!/^https?:\/\//i.test(url) || isLikelyAssetUrl(url)) return;
+    const contexts = candidates.get(url) || [];
+    if (context) contexts.push(context);
+    candidates.set(url, contexts);
+  };
+
+  for (const source of textSources) {
+    for (const match of source.matchAll(cloneRegExp(URL_PATTERN))) {
+      const rawUrl = match[0];
+      const index = match.index || 0;
+      addLinkCandidate(rawUrl, source.slice(Math.max(0, index - 120), Math.min(source.length, index + rawUrl.length + 120)));
+    }
+  }
+
+  const htmlBody = String(input.htmlBody || "");
+  for (const match of htmlBody.matchAll(cloneRegExp(HREF_PATTERN))) {
+    const rawUrl = String(match[1] || "");
+    const index = match.index || 0;
+    addLinkCandidate(rawUrl, htmlBody.slice(Math.max(0, index - 140), Math.min(htmlBody.length, index + rawUrl.length + 180)));
+  }
+
+  const links = Array.from(candidates.entries())
+    .map(([url, contexts]) => {
+      let host = "";
+      try {
+        host = new URL(url).host.replace(/^www\./i, "").toLowerCase();
+      } catch {
+        return null;
+      }
+
+      const urlSignal = url;
+      const contextSignal = contexts.join("\n");
+      const signal = `${urlSignal}\n${contextSignal}`;
+      let bestKind: ExtractedLinkKind = "other";
+      let bestLabel = "普通链接";
+      let bestScore = SCOREABLE_LINK_PATTERN.test(signal) ? 26 : 0;
+
+      for (const classifier of LINK_CLASSIFIERS) {
+        const urlMatched = classifier.patterns.some(pattern => pattern.test(urlSignal));
+        const contextMatched = classifier.patterns.some(pattern => pattern.test(contextSignal));
+        if (!urlMatched && !contextMatched) continue;
+
+        const keywordBoost = /[?&](?:token|code|otp|auth|magic|session)=/i.test(url) ? 10 : 0;
+        const magicContextBoost =
+          classifier.kind === "magic_link" && /(?:magic|passwordless|one[-\s]?tap|直接登录|免密)/i.test(contextSignal)
+            ? 24
+            : 0;
+        const score =
+          classifier.score + keywordBoost + magicContextBoost + (urlMatched ? 14 : 0) + (contextMatched ? 4 : 0);
+        if (score > bestScore) {
+          bestKind = classifier.kind;
+          bestLabel = classifier.label;
+          bestScore = score;
+        }
+      }
+
+      return {
+        host,
+        kind: bestKind,
+        label: bestLabel,
+        score: bestScore,
+        url,
+      } satisfies ExtractedEmailLink;
+    })
+    .filter((item): item is ExtractedEmailLink => Boolean(item));
+
+  const filtered = links.filter(link => link.score > 0);
+  const finalLinks = filtered.length > 0 ? filtered : links.slice(0, 1).map(link => ({ ...link, score: 1 }));
+
+  return finalLinks
+    .sort((left, right) => right.score - left.score || left.url.localeCompare(right.url))
+    .slice(0, 6);
+}
+
+function detectPlatform(
+  input: EmailExtractionInput,
+  links: ExtractedEmailLink[],
+): Pick<EmailExtractionResult, "platform" | "platform_slug"> {
+  const fromAddress = normalizeEmailAddress(input.fromAddress);
+  const fromDomain = fromAddress.includes("@") ? fromAddress.split("@").pop() || "" : "";
+  const keywordSource = [
+    String(input.subject || ""),
+    String(input.textBody || ""),
+    stripHtml(String(input.htmlBody || "")),
+  ].join("\n");
+
+  let bestMatch: { label: string; score: number; slug: string } | null = null;
+
+  for (const matcher of PLATFORM_MATCHERS) {
+    let score = 0;
+
+    if (matcher.domains.some(domain => fromDomain === domain || fromDomain.endsWith(`.${domain}`))) {
+      score += 92;
+    }
+
+    for (const domain of matcher.domains) {
+      if (links.some(link => link.host === domain || link.host.endsWith(`.${domain}`))) {
+        score += 48;
+      }
+    }
+
+    if (matcher.keywords.some(pattern => pattern.test(keywordSource))) {
+      score += 22;
+    }
+
+    if (!score) continue;
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { label: matcher.label, score, slug: matcher.slug };
+    }
+  }
+
+  return {
+    platform: bestMatch?.label || null,
+    platform_slug: bestMatch?.slug || null,
+  };
+}
+
+export function extractEmailExtraction(input: EmailExtractionInput): EmailExtractionResult {
   const sources = [
     String(input.subject || ""),
     String(input.textBody || ""),
@@ -220,34 +483,99 @@ export function extractVerificationCode(input: {
     String(input.preview || ""),
   ].filter(Boolean);
 
-  const byKeywordSegments = extractVerificationCodeFromKeywordSegments(sources);
-  if (byKeywordSegments) return byKeywordSegments;
-
-  for (const source of sources) {
-    for (const pattern of CONTEXTUAL_CODE_PATTERNS) {
-      const matched = normalizeVerificationCodeCandidate(source.match(pattern)?.[1]);
-      if (matched) return matched;
-    }
+  const verificationCandidates = collectVerificationCandidatesFromMatches(input.results || []);
+  for (const [code, score] of collectVerificationCandidatesFromSources(sources)) {
+    verificationCandidates.set(code, Math.max(verificationCandidates.get(code) || 0, score));
   }
 
-  const hasKeyword = sources.some(source => VERIFICATION_KEYWORD_PATTERN.test(source));
-  if (!hasKeyword) return null;
+  const verification_code = selectVerificationCandidate(verificationCandidates);
+  const links = extractRelevantLinks(input);
+  const { platform, platform_slug } = detectPlatform(input, links);
 
-  const numericCandidates = uniqueVerificationCodes(
-    sources.flatMap(source =>
-      (source.match(/\b\d{4,8}\b/g) || []).map(candidate => normalizeVerificationCodeCandidate(candidate)),
-    ),
-  );
-  if (numericCandidates.length === 1) return numericCandidates[0];
+  return {
+    links,
+    platform,
+    platform_slug,
+    primary_link: links[0] || null,
+    verification_code,
+  };
+}
 
-  const mixedCandidates = uniqueVerificationCodes(
-    sources.flatMap(source =>
-      (source.match(/\b[A-Z0-9]{4,8}\b/gi) || []).map(candidate => normalizeVerificationCodeCandidate(candidate)),
-    ),
-  );
-  if (mixedCandidates.length === 1) return mixedCandidates[0];
+export function extractVerificationCode(input: EmailExtractionInput): string | null {
+  return extractEmailExtraction(input).verification_code;
+}
 
-  return null;
+function toConfidenceLabel(score: number): RuleMatchInsight["confidence_label"] {
+  if (score >= 85) return "high";
+  if (score >= 65) return "medium";
+  return "low";
+}
+
+function normalizeCompareValue(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function mapLinkKindToInsightType(kind: ExtractedLinkKind): RuleMatchInsight["match_type"] {
+  if (kind === "magic_link") return "magic_link";
+  if (kind === "login") return "login_link";
+  if (kind === "reset_password") return "reset_link";
+  if (kind === "verification") return "verification_hint";
+  return "generic";
+}
+
+export function buildRuleMatchInsights(
+  matches: RuleMatch[] = [],
+  extraction: EmailExtractionResult,
+): RuleMatchInsight[] {
+  const finalVerificationCode = normalizeCompareValue(extraction.verification_code);
+
+  return matches.map(match => {
+    const remark = String(match.remark || "");
+    const value = String(match.value || "");
+    const signal = `${remark}\n${value}`;
+    const normalizedValue = normalizeCompareValue(value);
+    const normalizedCodeCandidate = normalizeCompareValue(normalizeVerificationCodeCandidate(value));
+    const linkedItem = extraction.links.find(link =>
+      normalizedValue
+      && (
+        normalizeCompareValue(link.url).includes(normalizedValue)
+        || normalizedValue.includes(normalizeCompareValue(link.host))
+      )
+    );
+
+    let match_type: RuleMatchInsight["match_type"] = "generic";
+    let confidence = 56;
+    let reason = "规则命中了邮件正文中的普通文本片段";
+
+    if (finalVerificationCode && normalizedCodeCandidate && normalizedCodeCandidate === finalVerificationCode) {
+      match_type = "verification_code";
+      confidence = 96;
+      reason = "命中内容与系统提取出的最终验证码一致";
+    } else if (linkedItem) {
+      match_type = mapLinkKindToInsightType(linkedItem.kind);
+      confidence = Math.max(72, Math.min(94, linkedItem.score + 6));
+      reason = `命中内容与识别出的${linkedItem.label}特征一致`;
+    } else if (VERIFICATION_KEYWORD_PATTERN.test(signal)) {
+      match_type = "verification_hint";
+      confidence = 78;
+      reason = "规则命中了验证码相关关键词或上下文";
+    } else if (
+      extraction.platform
+      && normalizeCompareValue(signal).includes(normalizeCompareValue(extraction.platform))
+    ) {
+      match_type = "platform_signal";
+      confidence = 72;
+      reason = `命中内容与识别平台 ${extraction.platform} 的特征一致`;
+    }
+
+    return {
+      confidence,
+      confidence_label: toConfidenceLabel(confidence),
+      match_type,
+      reason,
+      source: { ...match },
+    };
+  });
 }
 
 export function getCorsHeaders(

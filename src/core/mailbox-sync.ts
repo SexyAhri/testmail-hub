@@ -61,9 +61,12 @@ interface CloudflareCredentials {
   zoneId: string;
 }
 
+export interface CloudflareMailboxRouteConfig extends CloudflareCredentials {}
+
 export interface CloudflareMailboxSyncSnapshot {
   candidates: MailboxSyncCandidate[];
   catch_all_enabled: boolean;
+  catch_all_forward_to: string;
   configured: boolean;
 }
 
@@ -72,6 +75,24 @@ export function isCloudflareMailboxSyncConfigured(
 ): boolean {
   const credentials = resolveCredentials(env);
   return Boolean(credentials);
+}
+
+export function isCloudflareMailboxRouteConfigConfigured(
+  config: CloudflareMailboxRouteConfig | null | undefined,
+): boolean {
+  return Boolean(config?.apiToken && config?.zoneId && config?.mailboxDomain);
+}
+
+export function resolveCloudflareMailboxRouteConfig(
+  env: Pick<WorkerEnv, "CLOUDFLARE_API_TOKEN" | "CLOUDFLARE_ZONE_ID" | "MAILBOX_DOMAIN" | "CLOUDFLARE_EMAIL_WORKER">,
+  overrides?: { domain?: string | null; email_worker?: string | null; zone_id?: string | null },
+): CloudflareMailboxRouteConfig | null {
+  const apiToken = String(env.CLOUDFLARE_API_TOKEN || "").trim();
+  const zoneId = String(overrides?.zone_id || env.CLOUDFLARE_ZONE_ID || "").trim();
+  const mailboxDomain = String(overrides?.domain || env.MAILBOX_DOMAIN || "").trim().toLowerCase();
+  const workerName = String(overrides?.email_worker || env.CLOUDFLARE_EMAIL_WORKER || "temp-email-worker").trim();
+  if (!apiToken || !zoneId || !mailboxDomain) return null;
+  return { apiToken, mailboxDomain, workerName, zoneId };
 }
 
 export function extractCloudflareMailboxCandidates(
@@ -106,10 +127,18 @@ export async function getCloudflareMailboxSyncSnapshot(
   env: Pick<WorkerEnv, "CLOUDFLARE_API_TOKEN" | "CLOUDFLARE_ZONE_ID" | "MAILBOX_DOMAIN" | "CLOUDFLARE_EMAIL_WORKER">,
 ): Promise<CloudflareMailboxSyncSnapshot> {
   const credentials = resolveCredentials(env);
+  return getCloudflareMailboxSyncSnapshotByConfig(credentials);
+}
+
+export async function getCloudflareMailboxSyncSnapshotByConfig(
+  config: CloudflareMailboxRouteConfig | null,
+): Promise<CloudflareMailboxSyncSnapshot> {
+  const credentials = config;
   if (!credentials) {
     return {
       candidates: [],
       catch_all_enabled: false,
+      catch_all_forward_to: "",
       configured: false,
     };
   }
@@ -122,8 +151,46 @@ export async function getCloudflareMailboxSyncSnapshot(
   return {
     candidates: extractCloudflareMailboxCandidates(rules, credentials.mailboxDomain),
     catch_all_enabled: Boolean(catchAllEnvelope.result?.enabled),
+    catch_all_forward_to: extractForwardTargetFromActions(catchAllEnvelope.result?.actions),
     configured: true,
   };
+}
+
+export async function updateCloudflareCatchAllRuleByConfig(
+  config: CloudflareMailboxRouteConfig | null,
+  input: { enabled: boolean; forward_to?: string | null },
+): Promise<CloudflareMailboxSyncSnapshot> {
+  const credentials = config;
+  if (!credentials) {
+    return {
+      candidates: [],
+      catch_all_enabled: false,
+      catch_all_forward_to: "",
+      configured: false,
+    };
+  }
+
+  const currentCatchAll = await requestCloudflare<CloudflareCatchAllRule>(
+    credentials,
+    "/email/routing/rules/catch_all",
+  );
+
+  const forwardTo = normalizeEmailAddress(input.forward_to);
+  const actions = forwardTo
+    ? [{ type: "forward", value: [forwardTo] }]
+    : cloneActions(currentCatchAll.result?.actions);
+
+  await requestCloudflare<CloudflareCatchAllRule>(
+    credentials,
+    "/email/routing/rules/catch_all",
+    "PUT",
+    {
+      actions,
+      enabled: input.enabled,
+    },
+  );
+
+  return getCloudflareMailboxSyncSnapshotByConfig(credentials);
 }
 
 export async function upsertCloudflareMailboxRoute(
@@ -131,6 +198,14 @@ export async function upsertCloudflareMailboxRoute(
   input: { address: string; is_enabled: boolean },
 ): Promise<"created" | "updated" | "skipped"> {
   const credentials = resolveCredentials(env);
+  return upsertCloudflareMailboxRouteByConfig(credentials, input);
+}
+
+export async function upsertCloudflareMailboxRouteByConfig(
+  config: CloudflareMailboxRouteConfig | null,
+  input: { address: string; is_enabled: boolean },
+): Promise<"created" | "updated" | "skipped"> {
+  const credentials = config;
   if (!credentials) return "skipped";
 
   const address = normalizeEmailAddress(input.address);
@@ -201,6 +276,14 @@ export async function deleteCloudflareMailboxRoute(
   addressInput: string,
 ): Promise<"deleted" | "skipped"> {
   const credentials = resolveCredentials(env);
+  return deleteCloudflareMailboxRouteByConfig(credentials, addressInput);
+}
+
+export async function deleteCloudflareMailboxRouteByConfig(
+  config: CloudflareMailboxRouteConfig | null,
+  addressInput: string,
+): Promise<"deleted" | "skipped"> {
+  const credentials = config;
   if (!credentials) return "skipped";
 
   const address = normalizeEmailAddress(addressInput);
@@ -326,7 +409,26 @@ function cloneActions(actions: CloudflareRoutingAction[] | undefined): Cloudflar
 
 function buildMailboxRuleName(address: string): string {
   const localPart = normalizeEmailAddress(address).split("@")[0] || "mailbox";
-  return `TempMail ${localPart}`;
+  return `TestMail ${localPart}`;
+}
+
+function extractForwardTargetFromActions(actions: CloudflareRoutingAction[] | undefined): string {
+  if (!Array.isArray(actions) || actions.length === 0) return "";
+
+  for (const action of actions) {
+    const type = String(action?.type || "").trim().toLowerCase();
+    if (type !== "forward") continue;
+
+    if (Array.isArray(action?.value)) {
+      const target = normalizeEmailAddress(action.value[0]);
+      if (target) return target;
+    }
+
+    const target = normalizeEmailAddress(action?.value);
+    if (target) return target;
+  }
+
+  return "";
 }
 
 async function requestCloudflare<T>(

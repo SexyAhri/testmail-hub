@@ -1,8 +1,14 @@
 import type {
   AdminMutationPayload,
   AdminUserRecord,
+  ApiTokenIssueResult,
+  ApiTokenMutationPayload,
+  ApiTokenRecord,
   ApiEnvelope,
   AuditLogRecord,
+  DomainAssetRecord,
+  DomainAssetStatusRecord,
+  DomainMutationPayload,
   DomainsPayload,
   EmailDetail,
   EmailMetadataPayload,
@@ -13,6 +19,8 @@ import type {
   MailboxPayload,
   MailboxRecord,
   MailboxSyncResult,
+  MailboxPoolPayload,
+  NotificationDeliveryRecord,
   NotificationEndpointRecord,
   NotificationMutationPayload,
   OutboundContactPayload,
@@ -30,6 +38,9 @@ import type {
   RuleRecord,
   RuleTestResult,
   SessionPayload,
+  WorkspaceCatalog,
+  WorkspaceEnvironmentPayload,
+  WorkspaceProjectPayload,
   WhitelistMutationPayload,
   WhitelistSettings,
   WhitelistRecord,
@@ -83,8 +94,52 @@ export async function getSession() {
   return request<SessionPayload>("/auth/session");
 }
 
-export async function getDomains() {
-  return request<DomainsPayload>("/admin/domains");
+export async function getDomains(filters?: { environment_id?: number | null; project_id?: number | null }) {
+  const params = new URLSearchParams();
+  if (filters?.project_id) params.set("project_id", String(filters.project_id));
+  if (filters?.environment_id) params.set("environment_id", String(filters.environment_id));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<DomainsPayload>(`/admin/domains${suffix}`);
+}
+
+export async function getDomainAssets(page: number) {
+  return request<PaginationPayload<DomainAssetRecord>>(`/admin/domain-assets?page=${page}`);
+}
+
+export async function getDomainAssetStatuses() {
+  return request<DomainAssetStatusRecord[]>("/admin/domain-assets/status");
+}
+
+export async function createDomainAsset(payload: DomainMutationPayload) {
+  return request<{ ok: true }>("/admin/domain-assets", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateDomainAsset(id: number, payload: DomainMutationPayload) {
+  return request<{ ok: true }>(`/admin/domain-assets/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function removeDomainAsset(id: number) {
+  return request<{ ok: true }>(`/admin/domain-assets/${id}`, { method: "DELETE" });
+}
+
+export async function syncDomainAssetCatchAll(id: number) {
+  return request<{ catch_all_enabled: boolean; catch_all_forward_to: string; configured: boolean; ok: true }>(
+    `/admin/domain-assets/${id}/sync-catch-all`,
+    { method: "POST" },
+  );
+}
+
+export async function getWorkspaceCatalog(includeDisabled = true) {
+  const params = new URLSearchParams();
+  if (includeDisabled) params.set("include_disabled", "1");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<WorkspaceCatalog>(`/admin/workspace/catalog${suffix}`);
 }
 
 export async function getOverviewStats() {
@@ -184,9 +239,22 @@ export async function updateWhitelistSettings(payload: WhitelistSettings) {
   });
 }
 
-export async function getMailboxes(page: number, includeDeleted = false) {
+export async function getMailboxes(
+  page: number,
+  includeDeleted = false,
+  filters: {
+    environment_id?: number | null;
+    keyword?: string;
+    mailbox_pool_id?: number | null;
+    project_id?: number | null;
+  } = {},
+) {
   const params = new URLSearchParams({ page: String(page) });
   if (includeDeleted) params.set("include_deleted", "1");
+  if (filters.keyword) params.set("keyword", filters.keyword);
+  if (filters.project_id) params.set("project_id", String(filters.project_id));
+  if (filters.environment_id) params.set("environment_id", String(filters.environment_id));
+  if (filters.mailbox_pool_id) params.set("mailbox_pool_id", String(filters.mailbox_pool_id));
   return request<PaginationPayload<MailboxRecord>>(`/admin/mailboxes?${params.toString()}`);
 }
 
@@ -210,6 +278,60 @@ export async function removeMailbox(id: number) {
 
 export async function syncMailboxes() {
   return request<MailboxSyncResult>("/admin/mailboxes/sync", { method: "POST" });
+}
+
+export async function createProject(payload: WorkspaceProjectPayload) {
+  return request<{ ok: true }>("/admin/projects", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateProject(id: number, payload: WorkspaceProjectPayload) {
+  return request<{ ok: true }>(`/admin/projects/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function removeProject(id: number) {
+  return request<{ ok: true }>(`/admin/projects/${id}`, { method: "DELETE" });
+}
+
+export async function createEnvironment(payload: WorkspaceEnvironmentPayload) {
+  return request<{ ok: true }>("/admin/environments", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateEnvironment(id: number, payload: WorkspaceEnvironmentPayload) {
+  return request<{ ok: true }>(`/admin/environments/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function removeEnvironment(id: number) {
+  return request<{ ok: true }>(`/admin/environments/${id}`, { method: "DELETE" });
+}
+
+export async function createMailboxPool(payload: MailboxPoolPayload) {
+  return request<{ ok: true }>("/admin/mailbox-pools", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateMailboxPool(id: number, payload: MailboxPoolPayload) {
+  return request<{ ok: true }>(`/admin/mailbox-pools/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function removeMailboxPool(id: number) {
+  return request<{ ok: true }>(`/admin/mailbox-pools/${id}`, { method: "DELETE" });
 }
 
 export async function getAdmins(page: number) {
@@ -254,6 +376,41 @@ export async function removeNotification(id: number) {
 
 export async function testNotification(id: number) {
   return request<{ ok: true }>(`/admin/notifications/${id}/test`, { method: "POST" });
+}
+
+export async function getNotificationDeliveries(id: number, page: number) {
+  return request<PaginationPayload<NotificationDeliveryRecord>>(
+    `/admin/notifications/${id}/deliveries?page=${page}`,
+  );
+}
+
+export async function retryNotificationDelivery(id: number) {
+  return request<{ delivery: NotificationDeliveryRecord; ok: true }>(
+    `/admin/notifications/deliveries/${id}/retry`,
+    { method: "POST" },
+  );
+}
+
+export async function getApiTokens(page: number) {
+  return request<PaginationPayload<ApiTokenRecord>>(`/admin/api-tokens?page=${page}`);
+}
+
+export async function createApiToken(payload: ApiTokenMutationPayload) {
+  return request<ApiTokenIssueResult>("/admin/api-tokens", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateApiToken(id: string, payload: ApiTokenMutationPayload) {
+  return request<{ ok: true }>(`/admin/api-tokens/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function removeApiToken(id: string) {
+  return request<{ ok: true }>(`/admin/api-tokens/${id}`, { method: "DELETE" });
 }
 
 export async function getOutboundSettings() {

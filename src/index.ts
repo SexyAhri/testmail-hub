@@ -1,12 +1,22 @@
 import {
+  getBearerToken,
   getAdminSessionFromRequest,
+  getManagedApiTokenId,
+  hashApiTokenValue,
   hasPermission,
   isApiAuthorized,
 } from "./core/auth";
-import { disableExpiredMailboxes, clearExpiredEmails, purgeDeletedEmails } from "./core/db";
+import {
+  clearExpiredEmails,
+  disableExpiredMailboxes,
+  getActiveApiTokenById,
+  getAdminAccessContext,
+  purgeDeletedEmails,
+  touchApiTokenLastUsed,
+} from "./core/db";
 import { captureError } from "./core/errors";
 import { processIncomingEmail } from "./core/logic";
-import { sendEventNotifications } from "./core/notifications";
+import { processDueNotificationRetries, sendEventNotifications } from "./core/notifications";
 import { processDueOutboundEmails } from "./core/outbound-service";
 import * as handlers from "./handlers/handlers";
 import {
@@ -16,7 +26,13 @@ import {
 import { applyCors, getCorsHeaders, jsonError } from "./utils/utils";
 import { isSqliteConstraintError, isSqliteSchemaError } from "./utils/utils";
 import type { AdminPermission } from "./utils/constants";
-import type { WorkerEnv, WorkerExecutionContext, WorkerEmailMessage } from "./server/types";
+import type {
+  ApiTokenPermission,
+  AuthSession,
+  WorkerEnv,
+  WorkerExecutionContext,
+  WorkerEmailMessage,
+} from "./server/types";
 
 function apiOptionsResponse(request: Request, env: WorkerEnv): Response {
   const cors = getCorsHeaders(request, env.ALLOWED_API_ORIGINS);
@@ -41,8 +57,30 @@ async function requireAdmin(
   env: WorkerEnv,
   permission?: AdminPermission,
 ) {
-  const session = await getAdminSessionFromRequest(request, env.ADMIN_TOKEN, env.SESSION_SECRET);
-  if (!session) return { response: unauthorizedResponse(), session: null };
+  const rawSession = await getAdminSessionFromRequest(request, env.ADMIN_TOKEN, env.SESSION_SECRET);
+  if (!rawSession) return { response: unauthorizedResponse(), session: null };
+
+  let session: AuthSession = {
+    ...rawSession,
+    access_scope: rawSession.access_scope || "all",
+    project_ids: Array.isArray(rawSession.project_ids) ? rawSession.project_ids : [],
+  };
+
+  if (session.auth_kind === "admin_user") {
+    const access = await getAdminAccessContext(env.DB, session.user_id);
+    if (!access || !access.is_enabled) {
+      return { response: unauthorizedResponse(), session: null };
+    }
+    session = {
+      ...session,
+      access_scope: access.access_scope,
+      display_name: access.display_name,
+      project_ids: access.project_ids,
+      role: access.role,
+      username: access.username,
+    };
+  }
+
   if (permission && !hasPermission(session.role, permission)) {
     const { pathname } = new URL(request.url);
     await captureError(env.DB, "auth.permission_denied", new Error("forbidden"), {
@@ -57,6 +95,47 @@ async function requireAdmin(
   return { response: null, session };
 }
 
+function getScopedProjectIds(session: AuthSession): number[] | null {
+  return session.access_scope === "bound" ? (Array.isArray(session.project_ids) ? session.project_ids : []) : null;
+}
+
+async function requireApiAccess(
+  request: Request,
+  env: WorkerEnv,
+  permission: ApiTokenPermission,
+): Promise<{ project_ids: number[] | null; response: Response | null; token_id: string | null }> {
+  if (isApiAuthorized(request, env.API_TOKEN)) {
+    return { project_ids: null, response: null, token_id: null };
+  }
+
+  const bearerToken = getBearerToken(request);
+  const managedTokenId = getManagedApiTokenId(bearerToken);
+  if (!managedTokenId) {
+    return { project_ids: null, response: apiJsonError(request, env, "Unauthorized", 401), token_id: null };
+  }
+
+  const token = await getActiveApiTokenById(env.DB, managedTokenId);
+  if (!token) {
+    return { project_ids: null, response: apiJsonError(request, env, "Unauthorized", 401), token_id: null };
+  }
+
+  const incomingHash = await hashApiTokenValue(bearerToken);
+  if (incomingHash !== token.token_hash) {
+    return { project_ids: null, response: apiJsonError(request, env, "Unauthorized", 401), token_id: null };
+  }
+
+  if (!token.permissions.includes(permission)) {
+    return { project_ids: null, response: apiJsonError(request, env, "Forbidden", 403), token_id: token.id };
+  }
+
+  await touchApiTokenLastUsed(env.DB, token.id);
+  return {
+    project_ids: token.access_scope === "bound" ? token.projects.map(project => project.id) : null,
+    response: null,
+    token_id: token.id,
+  };
+}
+
 export default {
   async email(message: WorkerEmailMessage, env: WorkerEnv, ctx: WorkerExecutionContext) {
     try {
@@ -64,11 +143,43 @@ export default {
 
       if (processed) {
         ctx.waitUntil(
-          sendEventNotifications(
-            env.DB,
-            processed.has_matches ? "email.matched" : "email.received",
-            { ...processed },
-          ),
+          (async () => {
+            const payload = {
+              attachment_count: processed.attachment_count,
+              environment_id: processed.environment_id,
+              extraction: { ...processed.extraction },
+              from: processed.from,
+              has_matches: processed.has_matches,
+              mailbox_pool_id: processed.mailbox_pool_id,
+              message_id: processed.message_id,
+              preview: processed.preview,
+              project_id: processed.project_id,
+              project_ids: [...processed.project_ids],
+              received_at: processed.received_at,
+              result_count: processed.result_count,
+              result_insights: processed.result_insights.map(item => ({ ...item, source: { ...item.source } })),
+              results: processed.results.map(item => ({ ...item })),
+              subject: processed.subject,
+              to: [...processed.to],
+            };
+            const scope = {
+              environment_id: processed.environment_id,
+              mailbox_pool_id: processed.mailbox_pool_id,
+              project_id: processed.project_id,
+              project_ids: [...processed.project_ids],
+            };
+
+            await sendEventNotifications(env.DB, "email.received", payload, scope);
+            if (processed.has_matches) {
+              await sendEventNotifications(env.DB, "email.matched", payload, scope);
+            }
+            if (processed.extraction.verification_code) {
+              await sendEventNotifications(env.DB, "email.code_extracted", payload, scope);
+            }
+            if (processed.extraction.links.length > 0) {
+              await sendEventNotifications(env.DB, "email.link_extracted", payload, scope);
+            }
+          })(),
         );
       }
 
@@ -95,11 +206,85 @@ export default {
         if (!cors.allowed && request.headers.get("Origin")) {
           return new Response("Origin not allowed", { status: 403, headers: cors.headers });
         }
-        if (!isApiAuthorized(request, env.API_TOKEN)) {
-          return apiJsonError(request, env, "Unauthorized", 401);
-        }
+        const apiAccess = await requireApiAccess(request, env, "read:mail");
+        if (apiAccess.response) return apiAccess.response;
 
-        const response = await handlers.handleEmailsLatest(url, env.DB);
+        const response = await handlers.handleEmailsLatest(url, env.DB, apiAccess.project_ids);
+        return applyCors(response, cors.headers);
+      }
+
+      if (pathname === "/api/emails/latest/extraction") {
+        if (method === "OPTIONS") return apiOptionsResponse(request, env);
+        if (method !== "GET") return apiJsonError(request, env, "Method Not Allowed", 405);
+
+        const cors = getCorsHeaders(request, env.ALLOWED_API_ORIGINS);
+        if (!cors.allowed && request.headers.get("Origin")) {
+          return new Response("Origin not allowed", { status: 403, headers: cors.headers });
+        }
+        const apiAccess = await requireApiAccess(request, env, "read:code");
+        if (apiAccess.response) return apiAccess.response;
+
+        const response = await handlers.handleEmailsLatestExtraction(url, env.DB, apiAccess.project_ids);
+        return applyCors(response, cors.headers);
+      }
+
+      if (pathname === "/api/emails/code") {
+        if (method === "OPTIONS") return apiOptionsResponse(request, env);
+        if (method !== "GET") return apiJsonError(request, env, "Method Not Allowed", 405);
+
+        const cors = getCorsHeaders(request, env.ALLOWED_API_ORIGINS);
+        if (!cors.allowed && request.headers.get("Origin")) {
+          return new Response("Origin not allowed", { status: 403, headers: cors.headers });
+        }
+        const apiAccess = await requireApiAccess(request, env, "read:code");
+        if (apiAccess.response) return apiAccess.response;
+
+        const response = await handlers.handleEmailsCode(url, env.DB, apiAccess.project_ids);
+        return applyCors(response, cors.headers);
+      }
+
+      if (/^\/api\/emails\/[^/]+\/attachments\/\d+$/.test(pathname)) {
+        if (method === "OPTIONS") return apiOptionsResponse(request, env);
+        if (method !== "GET") return apiJsonError(request, env, "Method Not Allowed", 405);
+
+        const cors = getCorsHeaders(request, env.ALLOWED_API_ORIGINS);
+        if (!cors.allowed && request.headers.get("Origin")) {
+          return new Response("Origin not allowed", { status: 403, headers: cors.headers });
+        }
+        const apiAccess = await requireApiAccess(request, env, "read:attachment");
+        if (apiAccess.response) return apiAccess.response;
+
+        const response = await handlers.handlePublicEmailAttachment(pathname, env.DB, apiAccess.project_ids);
+        return applyCors(response, cors.headers);
+      }
+
+      if (/^\/api\/emails\/[^/]+\/extractions$/.test(pathname)) {
+        if (method === "OPTIONS") return apiOptionsResponse(request, env);
+        if (method !== "GET") return apiJsonError(request, env, "Method Not Allowed", 405);
+
+        const cors = getCorsHeaders(request, env.ALLOWED_API_ORIGINS);
+        if (!cors.allowed && request.headers.get("Origin")) {
+          return new Response("Origin not allowed", { status: 403, headers: cors.headers });
+        }
+        const apiAccess = await requireApiAccess(request, env, "read:rule-result");
+        if (apiAccess.response) return apiAccess.response;
+
+        const response = await handlers.handlePublicEmailExtractions(pathname, env.DB, apiAccess.project_ids);
+        return applyCors(response, cors.headers);
+      }
+
+      if (/^\/api\/emails\/[^/]+$/.test(pathname)) {
+        if (method === "OPTIONS") return apiOptionsResponse(request, env);
+        if (method !== "GET") return apiJsonError(request, env, "Method Not Allowed", 405);
+
+        const cors = getCorsHeaders(request, env.ALLOWED_API_ORIGINS);
+        if (!cors.allowed && request.headers.get("Origin")) {
+          return new Response("Origin not allowed", { status: 403, headers: cors.headers });
+        }
+        const apiAccess = await requireApiAccess(request, env, "read:mail");
+        if (apiAccess.response) return apiAccess.response;
+
+        const response = await handlers.handlePublicEmailDetail(pathname, env.DB, apiAccess.project_ids);
         return applyCors(response, cors.headers);
       }
 
@@ -123,12 +308,52 @@ export default {
         if (auth.response || !auth.session) return auth.response!;
         const actor = auth.session;
 
-        if (pathname === "/admin/domains" && method === "GET") return handlers.handleAdminDomains(url, env.DB);
-        if (pathname === "/admin/stats/overview" && method === "GET") return handlers.handleAdminOverviewStats(env.DB);
+        if (pathname === "/admin/domains" && method === "GET") return handlers.handleAdminDomains(url, env.DB, actor, env);
+        if (pathname === "/admin/domain-assets" && method === "GET") return handlers.handleAdminDomainAssetsGet(url, env.DB, actor);
+        if (pathname === "/admin/domain-assets/status" && method === "GET") {
+          return handlers.handleAdminDomainAssetsStatusGet(env.DB, env, actor);
+        }
+        if (pathname === "/admin/domain-assets" && method === "POST") return handlers.handleAdminDomainAssetsPost(request, env.DB, actor);
+        if (/^\/admin\/domain-assets\/\d+\/sync-catch-all$/.test(pathname) && method === "POST") {
+          return handlers.handleAdminDomainAssetsSyncCatchAll(pathname, env.DB, env, actor);
+        }
+        if (pathname.startsWith("/admin/domain-assets/") && method === "PUT") return handlers.handleAdminDomainAssetsPut(pathname, request, env.DB, actor);
+        if (pathname.startsWith("/admin/domain-assets/") && method === "DELETE") return handlers.handleAdminDomainAssetsDelete(pathname, env.DB, actor);
+        if (pathname === "/admin/workspace/catalog" && method === "GET") {
+          return handlers.handleAdminWorkspaceCatalog(url, env.DB, actor);
+        }
+        if (pathname === "/admin/projects" && method === "POST") {
+          return handlers.handleAdminProjectsPost(request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/projects/") && method === "PUT") {
+          return handlers.handleAdminProjectsPut(pathname, request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/projects/") && method === "DELETE") {
+          return handlers.handleAdminProjectsDelete(pathname, env.DB, actor);
+        }
+        if (pathname === "/admin/environments" && method === "POST") {
+          return handlers.handleAdminEnvironmentsPost(request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/environments/") && method === "PUT") {
+          return handlers.handleAdminEnvironmentsPut(pathname, request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/environments/") && method === "DELETE") {
+          return handlers.handleAdminEnvironmentsDelete(pathname, env.DB, actor);
+        }
+        if (pathname === "/admin/mailbox-pools" && method === "POST") {
+          return handlers.handleAdminMailboxPoolsPost(request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/mailbox-pools/") && method === "PUT") {
+          return handlers.handleAdminMailboxPoolsPut(pathname, request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/mailbox-pools/") && method === "DELETE") {
+          return handlers.handleAdminMailboxPoolsDelete(pathname, env.DB, actor);
+        }
+        if (pathname === "/admin/stats/overview" && method === "GET") return handlers.handleAdminOverviewStats(env.DB, actor);
         if (pathname === "/admin/audit" && method === "GET") return handlers.handleAdminAuditLogs(url, env.DB);
         if (pathname === "/admin/errors" && method === "GET") return handlers.handleAdminErrors(url, env.DB);
 
-        if (pathname === "/admin/emails" && method === "GET") return handlers.handleAdminEmails(url, env.DB);
+        if (pathname === "/admin/emails" && method === "GET") return handlers.handleAdminEmails(url, env.DB, actor);
         if (/^\/admin\/emails\/[^/]+\/metadata$/.test(pathname) && method === "PUT") {
           return handlers.handleAdminEmailMetadataPut(pathname, request, env.DB, actor);
         }
@@ -139,10 +364,10 @@ export default {
           return handlers.handleAdminEmailPurge(pathname, env.DB, actor);
         }
         if (/^\/admin\/emails\/[^/]+\/attachments\/\d+$/.test(pathname) && method === "GET") {
-          return handlers.handleAdminEmailAttachment(pathname, env.DB);
+          return handlers.handleAdminEmailAttachment(pathname, env.DB, actor);
         }
         if (pathname.startsWith("/admin/emails/") && method === "GET") {
-          return handlers.handleAdminEmailDetail(pathname, env.DB);
+          return handlers.handleAdminEmailDetail(pathname, env.DB, actor);
         }
         if (pathname.startsWith("/admin/emails/") && method === "DELETE") {
           return handlers.handleAdminEmailDelete(pathname, env.DB, actor);
@@ -163,8 +388,8 @@ export default {
         if (pathname.startsWith("/admin/whitelist/") && method === "PUT") return handlers.handleAdminWhitelistPut(pathname, request, env.DB, actor);
         if (pathname.startsWith("/admin/whitelist/") && method === "DELETE") return handlers.handleAdminWhitelistDelete(pathname, env.DB, actor);
 
-        if (pathname === "/admin/mailboxes" && method === "GET") return handlers.handleAdminMailboxesGet(url, env.DB);
-        if (pathname === "/admin/mailboxes/sync" && method === "POST") return handlers.handleAdminMailboxesSync(env.DB, env);
+        if (pathname === "/admin/mailboxes" && method === "GET") return handlers.handleAdminMailboxesGet(url, env.DB, actor);
+        if (pathname === "/admin/mailboxes/sync" && method === "POST") return handlers.handleAdminMailboxesSync(env.DB, env, actor);
         if (pathname === "/admin/mailboxes" && method === "POST") return handlers.handleAdminMailboxesPost(request, env.DB, env, actor);
         if (pathname.startsWith("/admin/mailboxes/") && method === "PUT") return handlers.handleAdminMailboxesPut(pathname, request, env.DB, env, actor);
         if (pathname.startsWith("/admin/mailboxes/") && method === "DELETE") return handlers.handleAdminMailboxesDelete(pathname, env.DB, env, actor);
@@ -173,13 +398,23 @@ export default {
         if (pathname === "/admin/admins" && method === "POST") return handlers.handleAdminAdminsPost(request, env.DB, actor);
         if (pathname.startsWith("/admin/admins/") && method === "PUT") return handlers.handleAdminAdminsPut(pathname, request, env.DB, actor);
 
-        if (pathname === "/admin/notifications" && method === "GET") return handlers.handleAdminNotificationsGet(url, env.DB);
+        if (pathname === "/admin/notifications" && method === "GET") return handlers.handleAdminNotificationsGet(url, env.DB, actor);
+        if (/^\/admin\/notifications\/\d+\/deliveries$/.test(pathname) && method === "GET") {
+          return handlers.handleAdminNotificationDeliveriesGet(pathname, url, env.DB, actor);
+        }
         if (pathname === "/admin/notifications" && method === "POST") return handlers.handleAdminNotificationsPost(request, env.DB, actor);
+        if (/^\/admin\/notifications\/deliveries\/\d+\/retry$/.test(pathname) && method === "POST") {
+          return handlers.handleAdminNotificationDeliveryRetry(pathname, env.DB, actor);
+        }
         if (/^\/admin\/notifications\/\d+\/test$/.test(pathname) && method === "POST") {
-          return handlers.handleAdminNotificationsTest(pathname, env.DB);
+          return handlers.handleAdminNotificationsTest(pathname, env.DB, actor);
         }
         if (pathname.startsWith("/admin/notifications/") && method === "PUT") return handlers.handleAdminNotificationsPut(pathname, request, env.DB, actor);
         if (pathname.startsWith("/admin/notifications/") && method === "DELETE") return handlers.handleAdminNotificationsDelete(pathname, env.DB, actor);
+        if (pathname === "/admin/api-tokens" && method === "GET") return handlers.handleAdminApiTokensGet(url, env.DB, actor);
+        if (pathname === "/admin/api-tokens" && method === "POST") return handlers.handleAdminApiTokensPost(request, env.DB, actor);
+        if (pathname.startsWith("/admin/api-tokens/") && method === "PUT") return handlers.handleAdminApiTokensPut(pathname, request, env.DB, actor);
+        if (pathname.startsWith("/admin/api-tokens/") && method === "DELETE") return handlers.handleAdminApiTokensDelete(pathname, env.DB, actor);
 
         if (pathname === "/admin/outbound/settings" && method === "GET") {
           return handlers.handleAdminOutboundSettingsGet(env.DB, env);
@@ -235,7 +470,7 @@ export default {
 
         if (pathname.startsWith("/admin/export/") && method === "GET") {
           const resource = pathname.replace("/admin/export/", "");
-          return handlers.handleAdminExport(resource, env.DB, url.searchParams.get("format") || "csv");
+          return handlers.handleAdminExport(resource, env.DB, url.searchParams.get("format") || "csv", actor);
         }
 
         return jsonError("Not Found", 404);
@@ -274,6 +509,7 @@ export default {
     ctx.waitUntil(
       (async () => {
         try {
+          await processDueNotificationRetries(env.DB, 20);
           const outbound = await processDueOutboundEmails(env.DB, env, 10);
           for (const email of outbound.sent) {
             await sendEventNotifications(env.DB, "email.sent", {
@@ -299,6 +535,13 @@ export default {
             await sendEventNotifications(env.DB, "mailbox.expired", {
               address: mailbox.address,
               expires_at: mailbox.expires_at,
+              project_id: mailbox.project_id,
+              project_name: mailbox.project_name,
+            }, {
+              environment_id: mailbox.environment_id,
+              mailbox_pool_id: mailbox.mailbox_pool_id,
+              project_id: mailbox.project_id,
+              project_ids: mailbox.project_id ? [mailbox.project_id] : [],
             });
           }
         } catch (error) {
@@ -310,13 +553,18 @@ export default {
 };
 
 function resolveAdminPermission(pathname: string, method: string): AdminPermission | null {
+  if (pathname.startsWith("/admin/workspace") || pathname.startsWith("/admin/projects") || pathname.startsWith("/admin/environments") || pathname.startsWith("/admin/mailbox-pools")) {
+    return method === "GET" ? "workspace:read" : "workspace:write";
+  }
   if (pathname.startsWith("/admin/admins")) return method === "GET" ? "admins:read" : "admins:write";
+  if (pathname.startsWith("/admin/api-tokens")) return method === "GET" ? "api_tokens:read" : "api_tokens:write";
   if (pathname.startsWith("/admin/notifications")) return method === "GET" ? "notifications:read" : "notifications:write";
   if (pathname.startsWith("/admin/outbound")) return method === "GET" ? "outbound:read" : "outbound:write";
   if (pathname.startsWith("/admin/rules/test")) return "rules:test";
   if (pathname.startsWith("/admin/rules")) return method === "GET" ? "rules:read" : "rules:write";
   if (pathname.startsWith("/admin/whitelist")) return method === "GET" ? "whitelist:read" : "whitelist:write";
   if (pathname.startsWith("/admin/mailboxes")) return method === "GET" ? "mailboxes:read" : "mailboxes:write";
+  if (pathname.startsWith("/admin/domain-assets")) return method === "GET" ? "mailboxes:read" : "mailboxes:write";
   if (pathname.startsWith("/admin/emails")) {
     if (method === "GET") return "emails:read";
     if (pathname.endsWith("/metadata")) return "emails:write";
@@ -334,5 +582,8 @@ function normalizeConstraintMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error || "");
   if (/admin_users\.username|username/i.test(message)) return "username already exists";
   if (/mailboxes\.address|address/i.test(message)) return "mailbox address already exists";
+  if (/projects\.slug/i.test(message)) return "project slug already exists";
+  if (/idx_environments_project_slug|environments/i.test(message)) return "environment slug already exists in the selected project";
+  if (/idx_mailbox_pools_environment_slug|mailbox_pools/i.test(message)) return "mailbox pool slug already exists in the selected environment";
   return "database constraint failed";
 }

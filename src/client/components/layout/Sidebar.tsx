@@ -6,6 +6,7 @@ import {
   DashboardOutlined,
   FileSearchOutlined,
   InboxOutlined,
+  KeyOutlined,
   MailOutlined,
   NotificationOutlined,
   SafetyCertificateOutlined,
@@ -33,6 +34,8 @@ export interface SidebarItem {
 export function buildDefaultSidebarItems(): SidebarItem[] {
   return [
     { key: "/monitor", icon: <DashboardOutlined />, label: "监控中心" },
+    { key: "/projects", icon: <AppstoreOutlined />, label: "项目空间" },
+    { key: "/domains", icon: <AppstoreOutlined />, label: "域名资产" },
     {
       key: "mail",
       icon: <MailOutlined />,
@@ -60,6 +63,7 @@ export function buildDefaultSidebarItems(): SidebarItem[] {
       label: "系统管理",
       children: [
         { key: "/admins", icon: <TeamOutlined />, label: "管理员" },
+        { key: "/api-tokens", icon: <KeyOutlined />, label: "API Token" },
         { key: "/system/audit", icon: <AuditOutlined />, label: "审计日志" },
         { key: "/system/errors", icon: <WarningOutlined />, label: "系统日志" },
       ],

@@ -8,6 +8,8 @@ const decoder = new TextDecoder();
 // Cloudflare Workers has strict CPU budgets; keep this moderate to avoid 1101/1102 on admin creation/login.
 const PBKDF2_ITERATIONS = 20_000;
 const PASSWORD_SALT_BYTES = 16;
+const MANAGED_API_TOKEN_PREFIX = "tmc_pat_";
+const MANAGED_API_TOKEN_SEPARATOR = ".";
 
 interface SessionPayload extends AuthSession {
   exp: number;
@@ -41,6 +43,27 @@ export async function getAdminSessionFromRequest(
 export function isApiAuthorized(request: Request, apiToken: string | undefined): boolean {
   if (!apiToken) return false;
   return getBearerToken(request) === apiToken;
+}
+
+export function createManagedApiTokenValue(id: string): string {
+  const suffix = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, "");
+  return `${MANAGED_API_TOKEN_PREFIX}${id}${MANAGED_API_TOKEN_SEPARATOR}${suffix}`;
+}
+
+export function getManagedApiTokenId(token: string): string | null {
+  const normalized = String(token || "").trim();
+  if (!normalized.startsWith(MANAGED_API_TOKEN_PREFIX)) return null;
+
+  const remainder = normalized.slice(MANAGED_API_TOKEN_PREFIX.length);
+  const separatorIndex = remainder.indexOf(MANAGED_API_TOKEN_SEPARATOR);
+  if (separatorIndex <= 0) return null;
+
+  return remainder.slice(0, separatorIndex).trim() || null;
+}
+
+export async function hashApiTokenValue(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(String(token || "").trim()));
+  return encodeBase64Url(new Uint8Array(digest));
 }
 
 export async function createBootstrapSessionCookie(
@@ -147,9 +170,11 @@ export async function hashUserAgent(request: Request): Promise<string> {
 
 function buildBootstrapSession(request: Request): AuthSession {
   return {
+    access_scope: "all",
     auth_kind: "bootstrap_token",
     display_name: "初始管理员",
     expires_at: Date.now() + SESSION_TTL_SECONDS * 1000,
+    project_ids: [],
     role: "owner",
     user_agent_hash: "",
     user_id: "bootstrap-owner",
@@ -179,9 +204,15 @@ async function verifySessionToken(
     }
 
     return {
+      access_scope: parsed.access_scope || "all",
       auth_kind: parsed.auth_kind,
       display_name: parsed.display_name,
       expires_at: parsed.exp,
+      project_ids: Array.isArray(parsed.project_ids)
+        ? parsed.project_ids
+          .map(item => Number(item))
+          .filter(item => Number.isFinite(item) && item > 0)
+        : [],
       role: parsed.role,
       user_agent_hash: parsed.user_agent_hash,
       user_id: parsed.user_id,
@@ -192,7 +223,7 @@ async function verifySessionToken(
   }
 }
 
-function getBearerToken(request: Request): string {
+export function getBearerToken(request: Request): string {
   const header = request.headers.get("Authorization") || "";
   return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 }

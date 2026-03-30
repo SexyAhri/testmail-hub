@@ -85,8 +85,8 @@ test("validateOutboundEmailInput blocks external recipients when disabled", () =
 
 test("formatFromHeader renders display name and address", () => {
   assert.equal(
-    formatFromHeader("Ahri TempMail Console", "tempmail@vixenahri.cn"),
-    "Ahri TempMail Console <tempmail@vixenahri.cn>",
+    formatFromHeader("Ahri TestMail Hub", "tempmail@vixenahri.cn"),
+    "Ahri TestMail Hub <tempmail@vixenahri.cn>",
   );
 });
 

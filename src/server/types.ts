@@ -37,12 +37,17 @@ export interface WorkerExecutionContext {
 }
 
 export type AdminRole = "owner" | "admin" | "analyst";
+export type AccessScope = "all" | "bound";
 export type AuthKind = "bootstrap_token" | "admin_user";
+export type ApiTokenPermission = "read:attachment" | "read:code" | "read:mail" | "read:rule-result";
+export type CatchAllMode = "inherit" | "enabled" | "disabled";
 
 export interface AuthSession {
+  access_scope?: AccessScope;
   auth_kind: AuthKind;
   display_name: string;
   expires_at: number;
+  project_ids?: number[];
   role: AdminRole;
   user_agent_hash: string;
   user_id: string;
@@ -70,6 +75,7 @@ export interface WorkerEnv {
 }
 
 export interface RuleMatch {
+  [key: string]: JsonValue;
   remark: string | null;
   rule_id: number;
   value: string;
@@ -85,12 +91,122 @@ export interface EmailAttachmentRecord {
   size_bytes: number;
 }
 
-export interface EmailSummary {
+export type ExtractedLinkKind =
+  | "verification"
+  | "magic_link"
+  | "login"
+  | "reset_password"
+  | "invitation"
+  | "action"
+  | "other";
+
+export interface ExtractedEmailLink {
+  [key: string]: JsonValue;
+  host: string;
+  kind: ExtractedLinkKind;
+  label: string;
+  score: number;
+  url: string;
+}
+
+export interface EmailExtractionResult {
+  [key: string]: JsonValue;
+  links: ExtractedEmailLink[];
+  platform: string | null;
+  platform_slug: string | null;
+  primary_link: ExtractedEmailLink | null;
+  verification_code: string | null;
+}
+
+export type RuleMatchInsightType =
+  | "verification_code"
+  | "verification_hint"
+  | "magic_link"
+  | "login_link"
+  | "reset_link"
+  | "platform_signal"
+  | "generic";
+
+export interface RuleMatchInsight {
+  [key: string]: JsonValue;
+  confidence: number;
+  confidence_label: "high" | "medium" | "low";
+  match_type: RuleMatchInsightType;
+  reason: string;
+  source: RuleMatch;
+}
+
+export interface WorkspaceScope {
+  environment_id: number | null;
+  environment_name: string;
+  environment_slug: string;
+  mailbox_pool_id: number | null;
+  mailbox_pool_name: string;
+  mailbox_pool_slug: string;
+  project_id: number | null;
+  project_name: string;
+  project_slug: string;
+}
+
+export interface WorkspaceProjectRecord {
+  created_at: number;
+  description: string;
+  environment_count: number;
+  id: number;
+  is_enabled: boolean;
+  mailbox_count: number;
+  mailbox_pool_count: number;
+  name: string;
+  slug: string;
+  updated_at: number;
+}
+
+export interface WorkspaceEnvironmentRecord {
+  created_at: number;
+  description: string;
+  id: number;
+  is_enabled: boolean;
+  mailbox_count: number;
+  mailbox_pool_count: number;
+  name: string;
+  project_id: number;
+  project_name: string;
+  project_slug: string;
+  slug: string;
+  updated_at: number;
+}
+
+export interface MailboxPoolRecord {
+  created_at: number;
+  description: string;
+  environment_id: number;
+  environment_name: string;
+  environment_slug: string;
+  id: number;
+  is_enabled: boolean;
+  mailbox_count: number;
+  name: string;
+  project_id: number;
+  project_name: string;
+  project_slug: string;
+  slug: string;
+  updated_at: number;
+}
+
+export interface WorkspaceCatalog {
+  environments: WorkspaceEnvironmentRecord[];
+  mailbox_pools: MailboxPoolRecord[];
+  projects: WorkspaceProjectRecord[];
+}
+
+export interface EmailSummary extends WorkspaceScope {
   deleted_at: number | null;
+  extraction: EmailExtractionResult;
   from_address: string;
   has_attachments: boolean;
   message_id: string;
   note: string;
+  primary_mailbox_address: string;
   preview: string;
   received_at: number;
   result_count: number;
@@ -104,6 +220,7 @@ export interface EmailDetail extends EmailSummary {
   attachments: EmailAttachmentRecord[];
   html_body: string;
   raw_headers: Array<{ key: string; value: string }>;
+  result_insights: RuleMatchInsight[];
   results: RuleMatch[];
   text_body: string;
 }
@@ -127,7 +244,7 @@ export interface WhitelistRecord {
   updated_at: number;
 }
 
-export interface MailboxRecord {
+export interface MailboxRecord extends WorkspaceScope {
   address: string;
   created_at: number;
   created_by: string;
@@ -142,28 +259,79 @@ export interface MailboxRecord {
   updated_at: number;
 }
 
+export interface DomainAssetRecord {
+  catch_all_forward_to: string;
+  catch_all_mode: CatchAllMode;
+  created_at: number;
+  domain: string;
+  email_worker: string;
+  environment_id: number | null;
+  environment_name: string;
+  environment_slug: string;
+  id: number;
+  is_enabled: boolean;
+  is_primary: boolean;
+  note: string;
+  provider: string;
+  project_id: number | null;
+  project_name: string;
+  project_slug: string;
+  updated_at: number;
+  zone_id: string;
+}
+
+export interface DomainAssetStatusRecord {
+  active_mailbox_total: number;
+  catch_all_drift: boolean;
+  catch_all_enabled: boolean;
+  catch_all_forward_to: string;
+  catch_all_forward_to_actual: string;
+  catch_all_mode: CatchAllMode;
+  cloudflare_configured: boolean;
+  cloudflare_error: string;
+  cloudflare_routes_total: number;
+  domain: string;
+  email_total: number;
+  observed_mailbox_total: number;
+}
+
 export interface MailboxSyncResult {
   catch_all_enabled: boolean;
   cloudflare_configured: boolean;
   cloudflare_routes_total: number;
   created_count: number;
+  domain_summaries?: Array<{
+    catch_all_enabled: boolean;
+    cloudflare_configured: boolean;
+    cloudflare_routes_total: number;
+    domain: string;
+  }>;
   observed_total: number;
   skipped_count: number;
   updated_count: number;
 }
 
+export interface ProjectBindingRecord {
+  id: number;
+  name: string;
+  slug: string;
+}
+
 export interface AdminUserRecord {
+  access_scope: AccessScope;
   created_at: number;
   display_name: string;
   id: string;
   is_enabled: boolean;
   last_login_at: number | null;
+  projects: ProjectBindingRecord[];
   role: AdminRole;
   updated_at: number;
   username: string;
 }
 
 export interface NotificationEndpointRecord {
+  access_scope: AccessScope;
   created_at: number;
   events: string[];
   id: number;
@@ -172,9 +340,53 @@ export interface NotificationEndpointRecord {
   last_sent_at: number | null;
   last_status: string;
   name: string;
+  projects: ProjectBindingRecord[];
   secret: string;
   target: string;
   type: string;
+  updated_at: number;
+}
+
+export type NotificationDeliveryStatus = "failed" | "pending" | "retrying" | "success";
+
+export interface NotificationDeliveryScope {
+  environment_id?: number | null;
+  mailbox_pool_id?: number | null;
+  project_id?: number | null;
+  project_ids?: number[];
+}
+
+export interface NotificationDeliveryRecord {
+  attempt_count: number;
+  created_at: number;
+  event: string;
+  id: number;
+  last_attempt_at: number | null;
+  last_error: string;
+  max_attempts: number;
+  next_retry_at: number | null;
+  notification_endpoint_id: number;
+  payload: JsonValue;
+  response_status: number | null;
+  scope: NotificationDeliveryScope;
+  status: NotificationDeliveryStatus;
+  updated_at: number;
+}
+
+export interface ApiTokenRecord {
+  access_scope: AccessScope;
+  created_at: number;
+  created_by: string;
+  description: string;
+  expires_at: number | null;
+  id: string;
+  is_enabled: boolean;
+  last_used_at: number | null;
+  name: string;
+  permissions: ApiTokenPermission[];
+  projects: ProjectBindingRecord[];
+  token_prefix: string;
+  token_preview: string;
   updated_at: number;
 }
 
@@ -228,8 +440,11 @@ export interface EmailSearchFilters {
   date_to?: number | null;
   deleted?: "exclude" | "include" | "only";
   domain?: string | null;
+  environment_id?: number | null;
   has_attachments?: boolean | null;
   has_matches?: boolean | null;
+  mailbox_pool_id?: number | null;
+  project_id?: number | null;
   sender?: string | null;
   subject?: string | null;
 }
@@ -258,8 +473,11 @@ export interface OverviewStats {
   attachment_total: number;
   deleted_email_total: number;
   email_total: number;
+  environment_total: number;
   error_total: number;
+  mailbox_pool_total: number;
   matched_email_total: number;
+  project_total: number;
   recent_daily: Array<{ day: string; value: number }>;
   top_domains: Array<{ label: string; value: number }>;
   top_senders: Array<{ label: string; value: number }>;

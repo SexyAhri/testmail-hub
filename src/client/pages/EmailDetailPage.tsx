@@ -1,15 +1,33 @@
 import {
   ArrowLeftOutlined,
+  CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
   FileSearchOutlined,
-  FileTextOutlined,
-  Html5Outlined,
+  GlobalOutlined,
   InfoCircleOutlined,
+  LinkOutlined,
   RollbackOutlined,
   SaveOutlined,
+  SafetyCertificateOutlined,
 } from "@ant-design/icons";
-import { App, Button, Card, Col, Empty, Input, Popconfirm, Row, Segmented, Select, Space, Spin, Tag, theme } from "antd";
+import {
+  App,
+  Button,
+  Card,
+  Col,
+  Empty,
+  Input,
+  Popconfirm,
+  Row,
+  Segmented,
+  Select,
+  Space,
+  Spin,
+  Tag,
+  Typography,
+  theme,
+} from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -23,7 +41,7 @@ import {
   updateEmailMetadata,
 } from "../api";
 import { DataTable, MetricCard, PageHeader } from "../components";
-import type { EmailAttachmentRecord, EmailDetail, RuleMatch } from "../types";
+import type { EmailAttachmentRecord, EmailDetail, RuleMatchInsight } from "../types";
 import { formatDateTime, normalizeApiError } from "../utils";
 
 interface EmailDetailPageProps {
@@ -32,11 +50,28 @@ interface EmailDetailPageProps {
 
 type BodyMode = "html-preview" | "html-source" | "text";
 
-const BODY_PANEL_HEIGHT = 260;
-const BODY_PANEL_MAX_HEIGHT = 360;
+const BODY_PANEL_HEIGHT = 220;
+const BODY_PANEL_MAX_HEIGHT = 300;
 const DETAIL_PAGE_MIN_HEIGHT = "calc(100vh - 170px)";
 const DETAIL_TOP_CARD_MIN_HEIGHT = 360;
 const DETAIL_BOTTOM_TABLE_HEIGHT = 220;
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.style.position = "fixed";
+  textArea.style.opacity = "0";
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textArea);
+}
 
 export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps) {
   const navigate = useNavigate();
@@ -72,6 +107,15 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
       message.error(normalizeApiError(error));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleCopyValue(value: string, successText: string) {
+    try {
+      await copyText(value);
+      message.success(successText);
+    } catch (error) {
+      message.error(normalizeApiError(error, "复制失败"));
     }
   }
 
@@ -147,26 +191,68 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
     }
   }
 
-  const resultColumns = useMemo<ColumnsType<RuleMatch>>(
+  const resultColumns = useMemo<ColumnsType<RuleMatchInsight>>(
     () => [
       {
         title: "规则 ID",
-        dataIndex: "rule_id",
+        dataIndex: ["source", "rule_id"],
         key: "rule_id",
         width: 100,
         render: value => <Tag color="processing">#{value}</Tag>,
       },
       {
+        title: "类型",
+        dataIndex: "match_type",
+        key: "match_type",
+        width: 120,
+        render: value => {
+          const mapping: Record<string, { color: string; label: string }> = {
+            generic: { color: "default", label: "普通命中" },
+            login_link: { color: "blue", label: "登录链接" },
+            magic_link: { color: "purple", label: "魔法链接" },
+            platform_signal: { color: "geekblue", label: "平台特征" },
+            reset_link: { color: "orange", label: "重置链接" },
+            verification_code: { color: "green", label: "验证码" },
+            verification_hint: { color: "cyan", label: "验证码线索" },
+          };
+          const config = mapping[String(value || "generic")] || mapping.generic;
+          return <Tag color={config.color}>{config.label}</Tag>;
+        },
+      },
+      {
+        title: "置信度",
+        dataIndex: "confidence",
+        key: "confidence",
+        width: 110,
+        render: (_value, record) => {
+          const color =
+            record.confidence_label === "high" ? "success"
+            : record.confidence_label === "medium" ? "processing"
+            : "default";
+          const label =
+            record.confidence_label === "high" ? "高"
+            : record.confidence_label === "medium" ? "中"
+            : "低";
+          return <Tag color={color}>{label} {record.confidence}</Tag>;
+        },
+      },
+      {
         title: "备注",
-        dataIndex: "remark",
+        dataIndex: ["source", "remark"],
         key: "remark",
         render: value => value || "-",
       },
       {
         title: "命中内容",
-        dataIndex: "value",
+        dataIndex: ["source", "value"],
         key: "value",
         render: value => <span style={{ fontFamily: "monospace" }}>{value}</span>,
+      },
+      {
+        title: "命中原因",
+        dataIndex: "reason",
+        key: "reason",
+        render: value => value || "-",
       },
     ],
     [],
@@ -230,6 +316,10 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
   const infoItems = [
     { label: "发件人", value: detail.from_address },
     { label: "收件人", value: detail.to_address },
+    { label: "项目", value: detail.project_name || "-" },
+    { label: "环境", value: detail.environment_name || "-" },
+    { label: "邮箱池", value: detail.mailbox_pool_name || "-" },
+    { label: "归属邮箱", value: detail.primary_mailbox_address || "-" },
     { label: "接收时间", value: formatDateTime(detail.received_at) },
     { label: "Message ID", value: detail.message_id },
     { label: "删除时间", value: formatDateTime(detail.deleted_at) },
@@ -292,28 +382,28 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <MetricCard
-            title="文本长度"
-            value={detail.text_body.length}
-            icon={<FileTextOutlined />}
-            percent={Math.min(100, detail.text_body.length / 20)}
+            title="验证码"
+            value={detail.verification_code || "未识别"}
+            icon={<SafetyCertificateOutlined />}
+            percent={detail.verification_code ? 100 : 0}
             color="#52c41a"
           />
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <MetricCard
-            title="HTML 长度"
-            value={detail.html_body.length}
-            icon={<Html5Outlined />}
-            percent={Math.min(100, detail.html_body.length / 20)}
+            title="识别平台"
+            value={detail.extraction.platform || "未识别"}
+            icon={<GlobalOutlined />}
+            percent={detail.extraction.platform ? 100 : 0}
             color="#fa8c16"
           />
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <MetricCard
-            title="附件数量"
-            value={detail.attachments.length}
-            icon={<DownloadOutlined />}
-            percent={Math.min(100, detail.attachments.length * 20)}
+            title="提取链接"
+            value={detail.extraction.links.length}
+            icon={<LinkOutlined />}
+            percent={Math.min(100, detail.extraction.links.length * 20)}
             color="#722ed1"
           />
         </Col>
@@ -400,7 +490,7 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
                   <div>
                     <div style={{ marginBottom: 8, fontSize: 13, opacity: 0.8 }}>备注</div>
                     <Input.TextArea
-                      rows={3}
+                      rows={2}
                       value={noteDraft}
                       onChange={event => setNoteDraft(event.target.value)}
                       placeholder="补充这封邮件的用途、来源或处理说明"
@@ -440,35 +530,130 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
             )}
             style={{ borderRadius: 12, width: "100%" }}
           >
-            <div style={{ minHeight: DETAIL_TOP_CARD_MIN_HEIGHT }}>
-              {bodyMode === "text" ? (
-                <div style={bodyPanelStyle}>{detail.text_body || "(无文本正文)"}</div>
-              ) : null}
-
-              {bodyMode === "html-source" ? (
-                <div style={bodyPanelStyle}>{detail.html_body || "(无 HTML 正文)"}</div>
-              ) : null}
-
-              {bodyMode === "html-preview" ? (
-                detail.html_body ? (
-                  <iframe
-                    title="email-html-preview"
-                    srcDoc={detail.html_body}
+            <div style={{ minHeight: DETAIL_TOP_CARD_MIN_HEIGHT, display: "flex", flexDirection: "column" }}>
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: 12,
+                  borderRadius: 10,
+                  background: token.colorFillQuaternary,
+                }}
+              >
+                <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                  <div
                     style={{
-                      width: "100%",
-                      height: BODY_PANEL_HEIGHT,
-                      border: "1px solid rgba(0,0,0,0.08)",
-                      borderRadius: 10,
-                      background: "#fff",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      flexWrap: "wrap",
                     }}
-                    sandbox=""
-                  />
-                ) : (
-                  <div style={{ minHeight: BODY_PANEL_HEIGHT, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可预览的 HTML 正文" />
+                  >
+                    <Space size={[8, 8]} wrap>
+                      <Tag color={detail.verification_code ? "success" : "default"} icon={<SafetyCertificateOutlined />}>
+                        验证码 {detail.verification_code || "未识别"}
+                      </Tag>
+                      <Tag color={detail.extraction.platform ? "geekblue" : "default"} icon={<GlobalOutlined />}>
+                        平台 {detail.extraction.platform || "未识别"}
+                      </Tag>
+                      <Tag color={detail.extraction.links.length > 0 ? "cyan" : "default"} icon={<LinkOutlined />}>
+                        链接 {detail.extraction.links.length}
+                      </Tag>
+                    </Space>
+
+                    {detail.verification_code ? (
+                      <Button
+                        size="small"
+                        icon={<CopyOutlined />}
+                        onClick={() => void handleCopyValue(detail.verification_code || "", "验证码已复制")}
+                      >
+                        复制验证码
+                      </Button>
+                    ) : null}
                   </div>
-                )
-              ) : null}
+
+                  {detail.extraction.primary_link ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <Typography.Text
+                        style={{ flex: "1 1 280px", minWidth: 0, fontFamily: "monospace", fontSize: 12 }}
+                        ellipsis={{ tooltip: detail.extraction.primary_link.url }}
+                      >
+                        主链接: {detail.extraction.primary_link.url}
+                      </Typography.Text>
+                      <Space size={8}>
+                        <Button
+                          size="small"
+                          type="link"
+                          href={detail.extraction.primary_link.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          打开
+                        </Button>
+                        <Button
+                          size="small"
+                          type="link"
+                          icon={<CopyOutlined />}
+                          onClick={() => void handleCopyValue(detail.extraction.primary_link?.url || "", "链接已复制")}
+                        >
+                          复制
+                        </Button>
+                      </Space>
+                    </div>
+                  ) : (
+                    <Typography.Text type="secondary">未识别到高置信链接</Typography.Text>
+                  )}
+
+                  {detail.extraction.links.length > 1 ? (
+                    <Space size={[8, 8]} wrap>
+                      {detail.extraction.links.slice(1).map(link => (
+                        <Tag key={link.url} color="blue">
+                          {link.label}
+                        </Tag>
+                      ))}
+                    </Space>
+                  ) : null}
+                </Space>
+              </div>
+
+              <div style={{ flex: 1 }}>
+                {bodyMode === "text" ? (
+                  <div style={bodyPanelStyle}>{detail.text_body || "(无文本正文)"}</div>
+                ) : null}
+
+                {bodyMode === "html-source" ? (
+                  <div style={bodyPanelStyle}>{detail.html_body || "(无 HTML 正文)"}</div>
+                ) : null}
+
+                {bodyMode === "html-preview" ? (
+                  detail.html_body ? (
+                    <iframe
+                      title="email-html-preview"
+                      srcDoc={detail.html_body}
+                      style={{
+                        width: "100%",
+                        height: BODY_PANEL_HEIGHT,
+                        border: "1px solid rgba(0,0,0,0.08)",
+                        borderRadius: 10,
+                        background: "#fff",
+                      }}
+                      sandbox=""
+                    />
+                  ) : (
+                    <div style={{ minHeight: BODY_PANEL_HEIGHT, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可预览的 HTML 正文" />
+                    </div>
+                  )
+                ) : null}
+              </div>
             </div>
           </Card>
         </Col>
@@ -476,11 +661,11 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
 
       <Row gutter={[16, 16]} style={{ marginTop: 16, flex: 1, minHeight: 0 }} align="stretch">
         <Col xs={24} lg={12} style={{ display: "flex", minHeight: 0 }}>
-          <DataTable<RuleMatch>
+          <DataTable<RuleMatchInsight>
             cardTitle="规则命中"
             columns={resultColumns}
-            dataSource={detail.results}
-            rowKey={record => `${record.rule_id}-${record.value}`}
+            dataSource={detail.result_insights}
+            rowKey={record => `${record.source.rule_id}-${record.source.value}-${record.match_type}`}
             showPagination={false}
             style={{ width: "100%", height: "100%" }}
             scroll={{ x: "max-content", y: DETAIL_BOTTOM_TABLE_HEIGHT }}

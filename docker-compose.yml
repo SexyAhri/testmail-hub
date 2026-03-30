@@ -1,9 +1,9 @@
 services:
-  temp-mail-console:
+  testmail-hub:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: temp-mail-console
+    container_name: testmail-hub
     env_file:
       - .dev.vars
     environment:
@@ -22,12 +22,12 @@ services:
       start_period: 45s
     restart: unless-stopped
 
-  temp-mail-console-deploy:
+  testmail-hub-deploy:
     profiles: ["deploy"]
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: temp-mail-console-deploy
+    container_name: testmail-hub-deploy
     env_file:
       - .dev.vars
     environment:

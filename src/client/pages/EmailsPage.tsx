@@ -15,16 +15,22 @@ import dayjs, { type Dayjs } from "dayjs";
 import { useEffect, useMemo, useState, type ComponentProps } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { buildEmailSearchParams, buildExportUrl, deleteEmail, getEmails } from "../api";
+import { buildEmailSearchParams, buildExportUrl, deleteEmail, getEmails, getWorkspaceCatalog } from "../api";
 import { BatchActionsBar, DataTable, MetricCard, PageHeader, SearchToolbar } from "../components";
 import { useTableSelection } from "../hooks/useTableSelection";
-import type { EmailSummary } from "../types";
+import type { EmailSummary, WorkspaceCatalog } from "../types";
 import { buildBatchActionMessage, formatDateTime, normalizeApiError, runBatchAction } from "../utils";
 
 const { RangePicker } = DatePicker;
 
 type RangePickerValue = ComponentProps<typeof RangePicker>["value"];
 type RangePickerChangeValue = Parameters<NonNullable<ComponentProps<typeof RangePicker>["onChange"]>>[0];
+
+const EMPTY_CATALOG: WorkspaceCatalog = {
+  environments: [],
+  mailbox_pools: [],
+  projects: [],
+};
 
 interface EmailsPageProps {
   domains: string[];
@@ -53,14 +59,18 @@ export default function EmailsPage({ domains, onUnauthorized }: EmailsPageProps)
   const { message } = App.useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const [emails, setEmails] = useState<EmailSummary[]>([]);
+  const [catalog, setCatalog] = useState<WorkspaceCatalog>(EMPTY_CATALOG);
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
   const [pageSize, setPageSize] = useState(20);
   const [drafts, setDrafts] = useState({
     address: searchParams.get("address") || "",
     domain: searchParams.get("domain") || undefined,
+    environment_id: searchParams.get("environment_id") ? Number(searchParams.get("environment_id")) : undefined,
     has_attachments: searchParams.get("has_attachments") || undefined,
     has_matches: searchParams.get("has_matches") || undefined,
+    mailbox_pool_id: searchParams.get("mailbox_pool_id") ? Number(searchParams.get("mailbox_pool_id")) : undefined,
+    project_id: searchParams.get("project_id") ? Number(searchParams.get("project_id")) : undefined,
     sender: searchParams.get("sender") || "",
     subject: searchParams.get("subject") || "",
   });
@@ -69,11 +79,18 @@ export default function EmailsPage({ domains, onUnauthorized }: EmailsPageProps)
   const currentPage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
 
   useEffect(() => {
+    void loadWorkspaceCatalog();
+  }, []);
+
+  useEffect(() => {
     setDrafts({
       address: searchParams.get("address") || "",
       domain: searchParams.get("domain") || undefined,
+      environment_id: searchParams.get("environment_id") ? Number(searchParams.get("environment_id")) : undefined,
       has_attachments: searchParams.get("has_attachments") || undefined,
       has_matches: searchParams.get("has_matches") || undefined,
+      mailbox_pool_id: searchParams.get("mailbox_pool_id") ? Number(searchParams.get("mailbox_pool_id")) : undefined,
+      project_id: searchParams.get("project_id") ? Number(searchParams.get("project_id")) : undefined,
       sender: searchParams.get("sender") || "",
       subject: searchParams.get("subject") || "",
     });
@@ -103,12 +120,27 @@ export default function EmailsPage({ domains, onUnauthorized }: EmailsPageProps)
     }
   }
 
+  async function loadWorkspaceCatalog() {
+    try {
+      setCatalog(await getWorkspaceCatalog(true));
+    } catch (error) {
+      if (normalizeApiError(error) === "UNAUTHORIZED") {
+        onUnauthorized();
+        return;
+      }
+      message.error(normalizeApiError(error));
+    }
+  }
+
   function applyFilters(nextPage = 1) {
     const params = buildEmailSearchParams({
       address: drafts.address || undefined,
       domain: drafts.domain || undefined,
+      environment_id: drafts.environment_id || undefined,
       has_attachments: drafts.has_attachments ? drafts.has_attachments === "1" : undefined,
       has_matches: drafts.has_matches ? drafts.has_matches === "1" : undefined,
+      mailbox_pool_id: drafts.mailbox_pool_id || undefined,
+      project_id: drafts.project_id || undefined,
       sender: drafts.sender || undefined,
       subject: drafts.subject || undefined,
     });
@@ -141,8 +173,11 @@ export default function EmailsPage({ domains, onUnauthorized }: EmailsPageProps)
     setDrafts({
       address: "",
       domain: undefined,
+      environment_id: undefined,
       has_attachments: undefined,
       has_matches: undefined,
+      mailbox_pool_id: undefined,
+      project_id: undefined,
       sender: "",
       subject: "",
     });
@@ -205,8 +240,25 @@ export default function EmailsPage({ domains, onUnauthorized }: EmailsPageProps)
           <Typography.Text strong>{record.subject || "(无主题)"}</Typography.Text>
           <Typography.Text type="secondary">{record.preview || "暂无正文预览"}</Typography.Text>
           {record.note ? <Typography.Text type="secondary">备注: {record.note}</Typography.Text> : null}
-          {record.tags.length > 0 ? (
+          {record.tags.length > 0 || record.extraction.platform || record.extraction.links.length > 0 || record.project_name || record.environment_name || record.mailbox_pool_name ? (
             <Space size={[0, 4]} wrap>
+              {record.project_name ? (
+                <Tag color="blue">{record.project_name}</Tag>
+              ) : null}
+              {record.environment_name ? (
+                <Tag color="green">{record.environment_name}</Tag>
+              ) : null}
+              {record.mailbox_pool_name ? (
+                <Tag color="purple">{record.mailbox_pool_name}</Tag>
+              ) : null}
+              {record.extraction.platform ? (
+                <Tag color="geekblue">{record.extraction.platform}</Tag>
+              ) : null}
+              {record.extraction.links.length > 0 ? (
+                <Tag color="cyan">
+                  {record.extraction.primary_link?.label || "链接"} {record.extraction.links.length}
+                </Tag>
+              ) : null}
               {record.tags.map(tag => (
                 <Tag key={`${record.message_id}-${tag}`} color="blue">
                   {tag}
@@ -392,6 +444,50 @@ export default function EmailsPage({ domains, onUnauthorized }: EmailsPageProps)
                 value={drafts.domain}
                 options={domains.map(item => ({ label: item, value: item }))}
                 onChange={value => setDrafts(state => ({ ...state, domain: value }))}
+                style={{ width: "100%" }}
+              />
+            </div>
+            <div style={{ minWidth: 150, flex: "1 1 150px" }}>
+              <Select
+                allowClear
+                placeholder="项目"
+                value={drafts.project_id}
+                options={catalog.projects.map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id }))}
+                onChange={value => setDrafts(state => ({
+                  ...state,
+                  environment_id: undefined,
+                  mailbox_pool_id: undefined,
+                  project_id: value,
+                }))}
+                style={{ width: "100%" }}
+              />
+            </div>
+            <div style={{ minWidth: 150, flex: "1 1 150px" }}>
+              <Select
+                allowClear
+                placeholder="环境"
+                value={drafts.environment_id}
+                options={catalog.environments
+                  .filter(item => !drafts.project_id || item.project_id === drafts.project_id)
+                  .map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id }))}
+                onChange={value => setDrafts(state => ({
+                  ...state,
+                  environment_id: value,
+                  mailbox_pool_id: undefined,
+                }))}
+                style={{ width: "100%" }}
+              />
+            </div>
+            <div style={{ minWidth: 160, flex: "1 1 160px" }}>
+              <Select
+                allowClear
+                placeholder="邮箱池"
+                value={drafts.mailbox_pool_id}
+                options={catalog.mailbox_pools
+                  .filter(item => !drafts.project_id || item.project_id === drafts.project_id)
+                  .filter(item => !drafts.environment_id || item.environment_id === drafts.environment_id)
+                  .map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id }))}
+                onChange={value => setDrafts(state => ({ ...state, mailbox_pool_id: value }))}
                 style={{ width: "100%" }}
               />
             </div>

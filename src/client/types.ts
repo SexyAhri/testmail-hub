@@ -1,15 +1,25 @@
 import type {
+  AccessScope,
   AdminRole,
+  ApiTokenPermission,
+  ApiTokenRecord,
   AdminUserRecord,
   AuditLogRecord,
+  CatchAllMode,
+  DomainAssetRecord,
+  DomainAssetStatusRecord,
   EmailAttachmentRecord,
   EmailDetail,
+  EmailExtractionResult,
   ErrorEventsPayload,
   ErrorEventSummary,
   EmailSummary,
   ErrorEventRecord,
+  ExtractedEmailLink,
+  RuleMatchInsight,
   MailboxRecord,
   MailboxSyncResult,
+  NotificationDeliveryRecord,
   NotificationEndpointRecord,
   OutboundContactRecord,
   OutboundEmailAttachmentRecord,
@@ -19,24 +29,39 @@ import type {
   OutboundTemplateRecord,
   OverviewStats,
   PaginationPayload,
+  ProjectBindingRecord,
   RuleMatch,
   RuleRecord,
+  MailboxPoolRecord,
+  WorkspaceCatalog,
+  WorkspaceEnvironmentRecord,
+  WorkspaceProjectRecord,
   WhitelistSettings,
   WhitelistRecord,
 } from "../server/types";
 
 export type {
+  AccessScope,
   AdminRole,
+  ApiTokenPermission,
+  ApiTokenRecord,
   AdminUserRecord,
   AuditLogRecord,
+  CatchAllMode,
+  DomainAssetRecord,
+  DomainAssetStatusRecord,
   EmailAttachmentRecord,
   EmailDetail,
+  EmailExtractionResult,
   ErrorEventsPayload,
   ErrorEventSummary,
   EmailSummary,
   ErrorEventRecord,
+  ExtractedEmailLink,
+  RuleMatchInsight,
   MailboxRecord,
   MailboxSyncResult,
+  NotificationDeliveryRecord,
   NotificationEndpointRecord,
   OutboundContactRecord,
   OutboundEmailAttachmentRecord,
@@ -46,8 +71,13 @@ export type {
   OutboundTemplateRecord,
   OverviewStats,
   PaginationPayload,
+  ProjectBindingRecord,
   RuleMatch,
   RuleRecord,
+  MailboxPoolRecord,
+  WorkspaceCatalog,
+  WorkspaceEnvironmentRecord,
+  WorkspaceProjectRecord,
   WhitelistSettings,
   WhitelistRecord,
 };
@@ -63,14 +93,31 @@ export interface SessionPayload {
   mailbox_domain: string;
   ok: true;
   user: {
+    access_scope?: AccessScope;
     display_name: string;
+    projects?: ProjectBindingRecord[];
     role: AdminRole;
     username: string;
   };
 }
 
 export interface DomainsPayload {
+  default_domain: string;
   domains: string[];
+}
+
+export interface DomainMutationPayload {
+  catch_all_forward_to: string;
+  catch_all_mode: CatchAllMode;
+  domain: string;
+  email_worker: string;
+  environment_id?: number | null;
+  is_enabled: boolean;
+  is_primary: boolean;
+  note: string;
+  provider: string;
+  project_id?: number | null;
+  zone_id: string;
 }
 
 export interface LoginPayload {
@@ -82,12 +129,39 @@ export interface LoginPayload {
 export interface MailboxPayload {
   batch_count?: number;
   domain: string;
+  environment_id?: number | null;
   expires_at?: number | string | null;
   generate_random: boolean;
   is_enabled: boolean;
   local_part: string;
+  mailbox_pool_id?: number | null;
   note: string;
+  project_id?: number | null;
   tags?: string[] | string;
+}
+
+export interface WorkspaceProjectPayload {
+  description: string;
+  is_enabled: boolean;
+  name: string;
+  slug?: string;
+}
+
+export interface WorkspaceEnvironmentPayload {
+  description: string;
+  is_enabled: boolean;
+  name: string;
+  project_id: number;
+  slug?: string;
+}
+
+export interface MailboxPoolPayload {
+  description: string;
+  environment_id: number;
+  is_enabled: boolean;
+  name: string;
+  project_id: number;
+  slug?: string;
 }
 
 export interface RuleMutationPayload {
@@ -109,20 +183,39 @@ export interface EmailMetadataPayload {
 }
 
 export interface NotificationMutationPayload {
+  access_scope: AccessScope;
   events: string[];
   is_enabled: boolean;
   name: string;
+  project_ids?: number[] | string;
   secret: string;
   target: string;
   type: string;
 }
 
 export interface AdminMutationPayload {
+  access_scope: AccessScope;
   display_name: string;
   is_enabled: boolean;
   password?: string;
+  project_ids?: number[] | string;
   role: AdminRole;
   username?: string;
+}
+
+export interface ApiTokenMutationPayload {
+  access_scope: AccessScope;
+  description: string;
+  expires_at?: number | null;
+  is_enabled: boolean;
+  name: string;
+  permissions: ApiTokenPermission[] | string;
+  project_ids?: number[] | string;
+}
+
+export interface ApiTokenIssueResult {
+  plain_text_token: string;
+  token: ApiTokenRecord;
 }
 
 export interface RuleTestResult {
@@ -136,8 +229,11 @@ export interface EmailSearchPayload {
   date_to?: number;
   deleted?: "exclude" | "include" | "only";
   domain?: string;
+  environment_id?: number;
   has_attachments?: boolean;
   has_matches?: boolean;
+  mailbox_pool_id?: number;
+  project_id?: number;
   sender?: string;
   subject?: string;
 }

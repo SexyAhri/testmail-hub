@@ -1,17 +1,27 @@
 import { InboxOutlined, MailOutlined, SyncOutlined, ThunderboltOutlined } from "@ant-design/icons";
-import { App, Button, Col, DatePicker, Form, Input, Popconfirm, Row, Switch, Tag } from "antd";
+import { App, Button, Col, DatePicker, Form, Input, Popconfirm, Row, Select, Switch, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { createMailbox, getMailboxes, removeMailbox, syncMailboxes, updateMailbox, type MailboxPayload } from "../api";
+import {
+  createMailbox,
+  getDomains,
+  getMailboxes,
+  getWorkspaceCatalog,
+  removeMailbox,
+  syncMailboxes,
+  updateMailbox,
+  type MailboxPayload,
+} from "../api";
 import { ActionButtons, BatchActionsBar, DataTable, FormDrawer, MetricCard, PageHeader, SearchToolbar, StatusTag } from "../components";
 import { useTableSelection } from "../hooks/useTableSelection";
-import type { MailboxRecord, MailboxSyncResult } from "../types";
+import type { MailboxRecord, MailboxSyncResult, WorkspaceCatalog } from "../types";
 import { buildBatchActionMessage, formatDateTime, loadAllPages, normalizeApiError, randomLocalPart, runBatchAction } from "../utils";
 
 interface MailboxesPageProps {
+  domains: string[];
   mailboxDomain: string;
   onMailboxesChanged?: () => Promise<void> | void;
   onUnauthorized: () => void;
@@ -20,14 +30,24 @@ interface MailboxesPageProps {
 interface MailboxFormValues {
   batch_count: number;
   domain: string;
+  environment_id?: number;
   expires_at?: dayjs.Dayjs | null;
   is_enabled: boolean;
   local_part: string;
+  mailbox_pool_id?: number;
   note: string;
+  project_id?: number;
   tags: string;
 }
 
+const EMPTY_CATALOG: WorkspaceCatalog = {
+  environments: [],
+  mailbox_pools: [],
+  projects: [],
+};
+
 export default function MailboxesPage({
+  domains,
   mailboxDomain,
   onMailboxesChanged,
   onUnauthorized,
@@ -36,23 +56,71 @@ export default function MailboxesPage({
   const { message } = App.useApp();
   const [form] = Form.useForm<MailboxFormValues>();
   const [mailboxes, setMailboxes] = useState<MailboxRecord[]>([]);
+  const [catalog, setCatalog] = useState<WorkspaceCatalog>(EMPTY_CATALOG);
+  const [availableDomains, setAvailableDomains] = useState<string[]>([]);
+  const [preferredDomain, setPreferredDomain] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncSummary, setSyncSummary] = useState<MailboxSyncResult | null>(null);
   const [searchText, setSearchText] = useState("");
+  const [projectFilter, setProjectFilter] = useState<number | undefined>();
+  const [environmentFilter, setEnvironmentFilter] = useState<number | undefined>();
+  const [mailboxPoolFilter, setMailboxPoolFilter] = useState<number | undefined>();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<MailboxRecord | null>(null);
+  const watchedProjectId = Form.useWatch("project_id", form);
+  const watchedEnvironmentId = Form.useWatch("environment_id", form);
 
   useEffect(() => {
     void loadData();
   }, []);
 
+  useEffect(() => {
+    if (!drawerOpen) return;
+
+    let disposed = false;
+    void (async () => {
+      try {
+        const payload = await getDomains({
+          environment_id: watchedEnvironmentId,
+          project_id: watchedProjectId,
+        });
+        if (disposed) return;
+
+        setAvailableDomains(payload.domains);
+        setPreferredDomain(payload.default_domain || "");
+
+        const nextDomain = payload.default_domain || payload.domains[0] || "";
+        const currentDomain = String(form.getFieldValue("domain") || "").trim();
+        if (!currentDomain || !payload.domains.includes(currentDomain)) {
+          form.setFieldValue("domain", nextDomain || undefined);
+        }
+      } catch (error) {
+        if (disposed) return;
+        if (normalizeApiError(error) === "UNAUTHORIZED") {
+          onUnauthorized();
+          return;
+        }
+        message.error(normalizeApiError(error));
+      }
+    })();
+
+    return () => {
+      disposed = true;
+    };
+  }, [drawerOpen, form, message, onUnauthorized, watchedEnvironmentId, watchedProjectId]);
+
   async function loadData() {
     setLoading(true);
     try {
       await performSync(false);
-      setMailboxes(await loadAllPages(page => getMailboxes(page, false)));
+      const [items, workspaceCatalog] = await Promise.all([
+        loadAllPages(page => getMailboxes(page, false)),
+        getWorkspaceCatalog(true),
+      ]);
+      setMailboxes(items);
+      setCatalog(workspaceCatalog);
     } catch (error) {
       if (normalizeApiError(error) === "UNAUTHORIZED") {
         onUnauthorized();
@@ -97,30 +165,47 @@ export default function MailboxesPage({
     await onMailboxesChanged();
   }
 
+  const domainOptions = useMemo(() => {
+    const sourceDomains = drawerOpen ? availableDomains : domains;
+    const fallbackDomain = drawerOpen ? preferredDomain : mailboxDomain;
+    const values = Array.from(new Set([...sourceDomains, fallbackDomain].filter(Boolean)));
+    return values.map(item => ({ label: item, value: item }));
+  }, [availableDomains, domains, drawerOpen, mailboxDomain, preferredDomain]);
+
   function openCreateDrawer() {
     setEditing(null);
+    setAvailableDomains(domains);
+    setPreferredDomain(mailboxDomain);
     form.setFieldsValue({
       batch_count: 1,
-      domain: mailboxDomain || "",
+      domain: mailboxDomain || domains[0] || "",
+      environment_id: undefined,
       expires_at: null,
       is_enabled: true,
       local_part: "",
+      mailbox_pool_id: undefined,
       note: "",
+      project_id: undefined,
       tags: "",
     });
     setDrawerOpen(true);
   }
 
   function openEditDrawer(record: MailboxRecord) {
-    const [local_part, domain = mailboxDomain] = record.address.split("@");
+    const [local_part, domain = domains[0] || mailboxDomain] = record.address.split("@");
     setEditing(record);
+    setAvailableDomains(domains);
+    setPreferredDomain(domain);
     form.setFieldsValue({
       batch_count: 1,
       domain,
+      environment_id: record.environment_id || undefined,
       expires_at: record.expires_at ? dayjs(record.expires_at) : null,
       is_enabled: record.is_enabled,
       local_part,
+      mailbox_pool_id: record.mailbox_pool_id || undefined,
       note: record.note,
+      project_id: record.project_id || undefined,
       tags: record.tags.join(", "),
     });
     setDrawerOpen(true);
@@ -133,11 +218,14 @@ export default function MailboxesPage({
       const payload: MailboxPayload = {
         batch_count: values.batch_count,
         domain: values.domain.trim(),
+        environment_id: values.environment_id || null,
         expires_at: values.expires_at ? values.expires_at.valueOf() : null,
         generate_random: !values.local_part.trim(),
         is_enabled: values.is_enabled,
         local_part: values.local_part.trim(),
+        mailbox_pool_id: values.mailbox_pool_id || null,
         note: values.note.trim(),
+        project_id: values.project_id || null,
         tags: values.tags,
       };
 
@@ -178,29 +266,61 @@ export default function MailboxesPage({
 
   const filteredMailboxes = useMemo(() => {
     const keyword = searchText.trim().toLowerCase();
-    if (!keyword) return mailboxes;
-    return mailboxes.filter(item =>
-      [item.address, item.note, item.tags.join(", ")].some(value => value.toLowerCase().includes(keyword)),
-    );
-  }, [mailboxes, searchText]);
+    return mailboxes.filter(item => {
+      if (projectFilter && item.project_id !== projectFilter) return false;
+      if (environmentFilter && item.environment_id !== environmentFilter) return false;
+      if (mailboxPoolFilter && item.mailbox_pool_id !== mailboxPoolFilter) return false;
+      if (!keyword) return true;
+      return [
+        item.address,
+        item.note,
+        item.tags.join(", "),
+        item.project_name,
+        item.environment_name,
+        item.mailbox_pool_name,
+      ].some(value => value.toLowerCase().includes(keyword));
+    });
+  }, [environmentFilter, mailboxPoolFilter, mailboxes, projectFilter, searchText]);
 
   const enabledCount = useMemo(() => mailboxes.filter(item => item.is_enabled).length, [mailboxes]);
+  const assignedCount = useMemo(() => mailboxes.filter(item => item.project_id !== null).length, [mailboxes]);
   const {
     clearSelection,
     rowSelection,
     selectedItems,
   } = useTableSelection(filteredMailboxes, "id");
 
+  const projectOptions = useMemo(
+    () => catalog.projects.map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id })),
+    [catalog.projects],
+  );
+  const environmentOptions = useMemo(
+    () => catalog.environments
+      .filter(item => !watchedProjectId || item.project_id === watchedProjectId)
+      .map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id })),
+    [catalog.environments, watchedProjectId],
+  );
+  const mailboxPoolOptions = useMemo(
+    () => catalog.mailbox_pools
+      .filter(item => !watchedProjectId || item.project_id === watchedProjectId)
+      .filter(item => !watchedEnvironmentId || item.environment_id === watchedEnvironmentId)
+      .map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id })),
+    [catalog.mailbox_pools, watchedEnvironmentId, watchedProjectId],
+  );
+
   function buildMailboxUpdatePayload(record: MailboxRecord, is_enabled: boolean) {
-    const [local_part = "", domain = mailboxDomain] = record.address.split("@");
+    const [local_part = "", domain = domains[0] || mailboxDomain] = record.address.split("@");
     return {
       batch_count: 1,
       domain,
+      environment_id: record.environment_id,
       expires_at: record.expires_at,
       generate_random: false,
       is_enabled,
       local_part,
+      mailbox_pool_id: record.mailbox_pool_id,
       note: record.note,
+      project_id: record.project_id,
       tags: record.tags,
     };
   }
@@ -248,6 +368,17 @@ export default function MailboxesPage({
       dataIndex: "address",
       key: "address",
       render: value => <span style={{ fontFamily: "monospace" }}>{value}</span>,
+    },
+    {
+      title: "归属",
+      key: "scope",
+      render: (_value, record) => (
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {record.project_name ? <Tag color="blue">{record.project_name}</Tag> : <Tag>未归属</Tag>}
+          {record.environment_name ? <Tag color="green">{record.environment_name}</Tag> : null}
+          {record.mailbox_pool_name ? <Tag color="purple">{record.mailbox_pool_name}</Tag> : null}
+        </div>
+      ),
     },
     {
       title: "备注",
@@ -313,17 +444,20 @@ export default function MailboxesPage({
       <PageHeader title="邮箱资产" subtitle="创建、批量生成和维护托管邮箱，支持标签与生命周期配置" />
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={12} lg={8}>
+        <Col xs={24} sm={12} lg={6}>
           <MetricCard title="邮箱总数" value={mailboxes.length} icon={<InboxOutlined />} percent={Math.min(100, mailboxes.length * 10)} color="#1890ff" />
         </Col>
-        <Col xs={24} sm={12} lg={8}>
+        <Col xs={24} sm={12} lg={6}>
           <MetricCard title="启用邮箱" value={enabledCount} icon={<ThunderboltOutlined />} percent={mailboxes.length ? (enabledCount / mailboxes.length) * 100 : 0} color="#52c41a" />
         </Col>
-        <Col xs={24} sm={12} lg={8}>
+        <Col xs={24} sm={12} lg={6}>
+          <MetricCard title="已归属邮箱" value={assignedCount} icon={<MailOutlined />} percent={mailboxes.length ? (assignedCount / mailboxes.length) * 100 : 0} color="#fa8c16" />
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
           <MetricCard
             title={syncSummary?.cloudflare_configured ? "Cloudflare 路由" : "默认域名"}
-            value={syncSummary?.cloudflare_configured ? syncSummary.cloudflare_routes_total : mailboxDomain || "--"}
-            icon={<MailOutlined />}
+            value={syncSummary?.cloudflare_configured ? syncSummary.cloudflare_routes_total : domainOptions.length || "--"}
+            icon={<SyncOutlined />}
             percent={100}
             color="#722ed1"
           />
@@ -331,19 +465,82 @@ export default function MailboxesPage({
       </Row>
 
       <div style={{ marginBottom: 16 }}>
-        <SearchToolbar
-          searchPlaceholder="搜索邮箱、备注或标签"
-          searchValue={searchText}
-          onSearchChange={value => setSearchText(value)}
-          onReset={() => setSearchText("")}
-          onAdd={openCreateDrawer}
-          addText="新增邮箱"
-          extra={(
+        <SearchToolbar>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ minWidth: 220, flex: "1 1 220px" }}>
+              <Input
+                placeholder="搜索邮箱、备注、标签或归属"
+                value={searchText}
+                onChange={event => setSearchText(event.target.value)}
+              />
+            </div>
+            <div style={{ minWidth: 160, flex: "1 1 160px" }}>
+              <Select
+                allowClear
+                placeholder="项目"
+                value={projectFilter}
+                options={catalog.projects.map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id }))}
+                onChange={value => {
+                  setProjectFilter(value);
+                  setEnvironmentFilter(undefined);
+                  setMailboxPoolFilter(undefined);
+                }}
+                style={{ width: "100%" }}
+              />
+            </div>
+            <div style={{ minWidth: 150, flex: "1 1 150px" }}>
+              <Select
+                allowClear
+                placeholder="环境"
+                value={environmentFilter}
+                options={catalog.environments
+                  .filter(item => !projectFilter || item.project_id === projectFilter)
+                  .map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id }))}
+                onChange={value => {
+                  setEnvironmentFilter(value);
+                  setMailboxPoolFilter(undefined);
+                }}
+                style={{ width: "100%" }}
+              />
+            </div>
+            <div style={{ minWidth: 160, flex: "1 1 160px" }}>
+              <Select
+                allowClear
+                placeholder="邮箱池"
+                value={mailboxPoolFilter}
+                options={catalog.mailbox_pools
+                  .filter(item => !projectFilter || item.project_id === projectFilter)
+                  .filter(item => !environmentFilter || item.environment_id === environmentFilter)
+                  .map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id }))}
+                onChange={value => setMailboxPoolFilter(value)}
+                style={{ width: "100%" }}
+              />
+            </div>
+            <Button
+              onClick={() => {
+                setSearchText("");
+                setProjectFilter(undefined);
+                setEnvironmentFilter(undefined);
+                setMailboxPoolFilter(undefined);
+              }}
+            >
+              重置
+            </Button>
             <Button icon={<SyncOutlined />} loading={syncing} onClick={() => void performSync(true)} style={{ borderRadius: 8 }}>
               同步路由
             </Button>
-          )}
-        />
+            <Button type="primary" onClick={openCreateDrawer}>
+              新增邮箱
+            </Button>
+          </div>
+        </SearchToolbar>
       </div>
 
       <DataTable
@@ -402,8 +599,47 @@ export default function MailboxesPage({
           </Col>
         ) : null}
         <Col span={24}>
-          <Form.Item label="域名" name="domain" rules={[{ required: true, message: "请输入域名" }]}>
-            <Input placeholder="例如：vixenahri.cn" />
+          <Form.Item label="域名" name="domain" rules={[{ required: true, message: "请选择域名" }]}>
+            <Select
+              showSearch
+              options={domainOptions}
+              placeholder="选择已接入域名"
+              optionFilterProp="label"
+            />
+          </Form.Item>
+        </Col>
+        <Col span={24}>
+          <Form.Item label="项目" name="project_id">
+            <Select
+              allowClear
+              options={projectOptions}
+              placeholder="可选，未选择则为未归属邮箱"
+              onChange={() => {
+                form.setFieldValue("environment_id", undefined);
+                form.setFieldValue("mailbox_pool_id", undefined);
+              }}
+            />
+          </Form.Item>
+        </Col>
+        <Col span={24}>
+          <Form.Item label="环境" name="environment_id">
+            <Select
+              allowClear
+              options={environmentOptions}
+              placeholder={watchedProjectId ? "选择环境" : "请先选择项目"}
+              disabled={!watchedProjectId}
+              onChange={() => form.setFieldValue("mailbox_pool_id", undefined)}
+            />
+          </Form.Item>
+        </Col>
+        <Col span={24}>
+          <Form.Item label="邮箱池" name="mailbox_pool_id">
+            <Select
+              allowClear
+              options={mailboxPoolOptions}
+              placeholder={watchedEnvironmentId ? "选择邮箱池" : "请先选择环境"}
+              disabled={!watchedEnvironmentId}
+            />
           </Form.Item>
         </Col>
         <Col span={24}>

@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   ExportOutlined,
+  KeyOutlined,
   LinkOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
@@ -18,34 +19,68 @@ export default function ApiDocsPage({ mailboxDomain }: ApiDocsPageProps) {
   const baseUrl = typeof window === "undefined" ? "" : window.location.origin;
   const sampleAddress = `demo@${mailboxDomain || "example.com"}`;
   const latestEmailEndpoint = `${baseUrl}/api/emails/latest?address=${sampleAddress}`;
+  const latestCodeEndpoint = `${baseUrl}/api/emails/code?address=${sampleAddress}`;
+  const latestExtractionEndpoint = `${baseUrl}/api/emails/latest/extraction?address=${sampleAddress}`;
 
   const authEndpoints = [
     {
       endpoint: "POST /auth/login",
-      description: "支持 `ADMIN_TOKEN` 登录，也支持管理员用户名 + 密码登录，成功后写入签名 Session Cookie。",
+      description: "支持 Bootstrap 管理令牌登录，也支持管理员用户名 + 密码登录，成功后写入签名 Session Cookie。",
     },
     {
       endpoint: "GET /auth/session",
-      description: "读取当前登录态，返回当前账号信息、角色和默认邮箱域名。",
+      description: "读取当前登录状态，返回管理员角色、访问范围以及默认邮箱域名。",
     },
     {
       endpoint: "POST /auth/logout",
-      description: "清理当前会话 Cookie，退出后台控制台。",
+      description: "清理当前 Session Cookie，退出后台控制台。",
     },
   ];
 
   const publicEndpoints = [
     {
       endpoint: "GET /api/emails/latest",
-      description: "对外开放的查询接口，按邮箱地址返回最新一封已入库邮件。",
+      description: "按邮箱地址返回最新一封邮件摘要，要求 Bearer Token 具备 `read:mail` 权限。",
     },
+    {
+      endpoint: "GET /api/emails/code",
+      description: "按邮箱地址或 `message_id` 返回验证码，要求 Bearer Token 具备 `read:code` 权限。",
+    },
+    {
+      endpoint: "GET /api/emails/latest/extraction",
+      description: "只返回验证码、链接、平台识别等结构化提取结果，要求 Bearer Token 具备 `read:code` 权限。",
+    },
+    {
+      endpoint: "GET /api/emails/:messageId",
+      description: "返回指定邮件正文、头信息和附件元数据，要求 `read:mail` 权限。",
+    },
+    {
+      endpoint: "GET /api/emails/:messageId/attachments/:attachmentId",
+      description: "下载指定附件二进制内容，要求 `read:attachment` 权限。",
+    },
+    {
+      endpoint: "GET /api/emails/:messageId/extractions",
+      description: "返回提取结果、规则命中和最终验证码，要求 `read:rule-result` 权限。",
+    },
+  ];
+
+  const permissionTags = [
+    { color: "blue", value: "read:mail", description: "读取最新邮件摘要和邮件详情" },
+    { color: "gold", value: "read:code", description: "读取验证码和验证码接口返回结果" },
+    { color: "purple", value: "read:attachment", description: "下载邮件附件二进制内容" },
+    { color: "cyan", value: "read:rule-result", description: "读取结构化提取结果和规则命中信息" },
   ];
 
   const adminEndpoints = [
     "GET /admin/stats/overview",
+    "GET /admin/workspace/catalog",
+    "POST|PUT|DELETE /admin/projects",
+    "POST|PUT|DELETE /admin/environments",
+    "POST|PUT|DELETE /admin/mailbox-pools",
     "GET /admin/emails",
     "GET /admin/emails/:messageId",
     "GET /admin/emails/:messageId/attachments/:attachmentId",
+    "PUT /admin/emails/:messageId/metadata",
     "POST /admin/emails/:messageId/restore",
     "DELETE /admin/emails/:messageId",
     "DELETE /admin/emails/:messageId/purge",
@@ -56,6 +91,7 @@ export default function ApiDocsPage({ mailboxDomain }: ApiDocsPageProps) {
     "GET|POST|PUT /admin/admins",
     "GET|POST|PUT|DELETE /admin/notifications",
     "POST /admin/notifications/:id/test",
+    "GET|POST|PUT|DELETE /admin/api-tokens",
     "GET /admin/outbound/emails",
     "POST /admin/outbound/emails/send",
     "GET|PUT /admin/outbound/settings",
@@ -70,7 +106,7 @@ export default function ApiDocsPage({ mailboxDomain }: ApiDocsPageProps) {
     <div>
       <PageHeader
         title="开放 API"
-        subtitle="当前控制台已经包含登录会话、公共查询接口和完整的后台管理接口。这里整理了一份可直接对接的接口概览。"
+        subtitle="这里汇总了登录会话、公开查询接口、项目级 API Token，以及支持项目绑定的 Webhook 对接方式。"
         extra={(
           <Button type="primary" href="/emails">
             返回邮件中心
@@ -92,7 +128,7 @@ export default function ApiDocsPage({ mailboxDomain }: ApiDocsPageProps) {
               </Space>
 
               <Typography.Paragraph style={{ marginBottom: 0 }}>
-                传入邮箱地址后，返回该地址最新一封已入库邮件的 `message_id`、主题、发件人、收件人、接收时间、验证码与规则命中结果。
+                自动化脚本通常先通过最新邮件接口获取 `message_id`，再按需读取验证码、邮件详情、附件或提取结果。
               </Typography.Paragraph>
 
               <div
@@ -106,6 +142,28 @@ export default function ApiDocsPage({ mailboxDomain }: ApiDocsPageProps) {
                 {latestEmailEndpoint}
               </div>
 
+              <div
+                style={{
+                  padding: 16,
+                  borderRadius: 8,
+                  background: "rgba(79, 110, 247, 0.04)",
+                  fontFamily: "monospace",
+                }}
+              >
+                验证码接口: {latestCodeEndpoint}
+              </div>
+
+              <div
+                style={{
+                  padding: 16,
+                  borderRadius: 8,
+                  background: "rgba(79, 110, 247, 0.04)",
+                  fontFamily: "monospace",
+                }}
+              >
+                提取结果接口: {latestExtractionEndpoint}
+              </div>
+
               <Typography.Title level={5} style={{ margin: 0 }}>
                 请求头
               </Typography.Title>
@@ -117,7 +175,7 @@ export default function ApiDocsPage({ mailboxDomain }: ApiDocsPageProps) {
                   fontFamily: "monospace",
                 }}
               >
-                Authorization: Bearer YOUR_API_TOKEN
+                Authorization: Bearer YOUR_MANAGED_TOKEN
               </div>
 
               <Typography.Title level={5} style={{ margin: 0 }}>
@@ -133,7 +191,7 @@ export default function ApiDocsPage({ mailboxDomain }: ApiDocsPageProps) {
                 }}
               >
                 {`$headers = @{ Authorization = "Bearer YOUR_API_TOKEN" }
-Invoke-RestMethod -Uri "${latestEmailEndpoint}" -Headers $headers`}
+Invoke-RestMethod -Uri "${latestCodeEndpoint}" -Headers $headers`}
               </div>
 
               <Typography.Title level={5} style={{ margin: 0 }}>
@@ -148,11 +206,14 @@ Invoke-RestMethod -Uri "${latestEmailEndpoint}" -Headers $headers`}
                   whiteSpace: "pre-wrap",
                 }}
               >
-                {`const response = await fetch("${latestEmailEndpoint}", {
+                {`const latest = await fetch("${latestEmailEndpoint}", {
   headers: { Authorization: "Bearer YOUR_API_TOKEN" },
-});
+}).then(res => res.json());
 
-const payload = await response.json();`}
+const detail = await fetch(
+  "${baseUrl}/api/emails/" + latest.data.message_id + "/extractions",
+  { headers: { Authorization: "Bearer YOUR_API_TOKEN" } },
+).then(res => res.json());`}
               </div>
             </Space>
           </Card>
@@ -190,7 +251,7 @@ const payload = await response.json();`}
                 title={(
                   <Space>
                     <ApiOutlined style={{ color: "#4f6ef7" }} />
-                    公共接口
+                    公开接口
                   </Space>
                 )}
                 style={{ borderRadius: 12, height: "100%" }}
@@ -222,7 +283,7 @@ const payload = await response.json();`}
                 style={{ borderRadius: 12 }}
               >
                 <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-                  `/admin/*` 默认走 Cookie Session 鉴权，并按角色校验权限。附件下载、回收站恢复、规则测试、通知测试、导出等都已经接入。
+                  `/admin/*` 默认使用 Cookie Session 鉴权，并按管理员角色和项目绑定范围校验权限。
                 </Typography.Paragraph>
                 <Space wrap size={[8, 8]}>
                   {adminEndpoints.map(endpoint => (
@@ -246,25 +307,103 @@ const payload = await response.json();`}
                     鉴权要求
                   </Typography.Title>
                   <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                    公共查询接口使用 `Authorization: Bearer &lt;API_TOKEN&gt;`。后台接口不暴露管理员令牌，而是要求先登录换取 HttpOnly Session。
+                    公开接口支持两种 Bearer Token：传统全局 `API_TOKEN`，或在控制台创建的托管 API Token。后台接口仍然只接受登录后的 HttpOnly Session。
                   </Typography.Paragraph>
                 </div>
               </Space>
+            </Card>
+
+            <Card
+              size="small"
+              title={(
+                <Space>
+                  <KeyOutlined style={{ color: "#4f6ef7" }} />
+                  项目级 API Token
+                </Space>
+              )}
+              style={{ borderRadius: 12 }}
+            >
+              <Space wrap size={[8, 8]} style={{ marginBottom: 12 }}>
+                {permissionTags.map(item => (
+                  <Tag key={item.value} color={item.color}>
+                    {item.value}
+                  </Tag>
+                ))}
+              </Space>
+              <List
+                size="small"
+                dataSource={permissionTags}
+                renderItem={item => (
+                  <List.Item>
+                    <List.Item.Meta
+                      title={<Typography.Text code>{item.value}</Typography.Text>}
+                      description={item.description}
+                    />
+                  </List.Item>
+                )}
+              />
+              <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+                如果 Token 的 `access_scope = bound`，它只能读取绑定项目下的邮件和附件资源。
+              </Typography.Paragraph>
             </Card>
 
             <Alert
               type="info"
               showIcon
               message="CORS 策略"
-              description="当前仅对 `/api/*` 公开 CORS，并受 `ALLOWED_API_ORIGINS` 精确限制。后台 `/auth/*` 与 `/admin/*` 不建议跨站调用。"
+              description="当前仅对 `/api/*` 公开 CORS，并可通过 `ALLOWED_API_ORIGINS` 精确限制。`/auth/*` 与 `/admin/*` 不建议跨站调用。"
             />
 
             <Alert
               type="success"
               showIcon
-              message="返回内容"
-              description="最新邮件接口返回 `message_id`、`subject`、`from_address`、`to_address`、`received_at`、`verification_code` 和 `results`。没有邮件时返回 404。"
+              message="接口组合建议"
+              description="推荐先调用 `/api/emails/latest` 获取 `message_id`，再按需访问 `/api/emails/code`、`/api/emails/:messageId`、`/api/emails/:messageId/extractions` 或附件下载接口。"
             />
+
+            <Card
+              size="small"
+              title={(
+                <Space>
+                  <ThunderboltOutlined style={{ color: "#4f6ef7" }} />
+                  项目级 Webhook
+                </Space>
+              )}
+              style={{ borderRadius: 12 }}
+            >
+              <Typography.Paragraph type="secondary">
+                通知中心支持全局 Webhook 和项目绑定 Webhook。项目绑定端点只会接收命中绑定项目的事件。
+              </Typography.Paragraph>
+              <div
+                style={{
+                  padding: 16,
+                  borderRadius: 8,
+                  background: "rgba(79, 110, 247, 0.06)",
+                  fontFamily: "monospace",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {`{
+  "event": "email.received",
+  "source": "testmail-hub",
+  "sent_at": 1774760671582,
+  "scope": {
+    "project_id": 1,
+    "project_ids": [1],
+    "environment_id": 2,
+    "mailbox_pool_id": 3
+  },
+  "payload": {
+    "message_id": "msg_123",
+    "subject": "GitHub 登录验证码",
+    "verification_code": "123456"
+  }
+}`}
+              </div>
+              <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+                如果配置了 Secret，请校验 `X-Temp-Mail-Signature`；事件类型会通过 `X-Temp-Mail-Event` 请求头一并传出。
+              </Typography.Paragraph>
+            </Card>
 
             <Card
               size="small"
@@ -290,7 +429,7 @@ const payload = await response.json();`}
               type="warning"
               showIcon
               message="推荐接入方式"
-              description="第三方系统读取验证码或登录邮件时，优先调用 `/api/emails/latest`。需要管理规则、邮箱资产和管理员时，再通过控制台或受信任服务调用后台接口。"
+              description="自动化脚本优先使用项目级 Bearer Token 调用公开 API；需要管理规则、邮箱、管理员和 Webhook 时，再通过控制台登录态访问后台接口。"
             />
           </Space>
         </Col>

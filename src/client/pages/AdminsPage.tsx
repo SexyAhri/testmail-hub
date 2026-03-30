@@ -1,8 +1,8 @@
-import { App, Button, Col, Form, Input, Select, Switch } from "antd";
+import { App, Button, Col, Form, Input, Select, Switch, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
 
-import { createAdmin, getAdmins, updateAdmin } from "../api";
+import { createAdmin, getAdmins, getWorkspaceCatalog, updateAdmin } from "../api";
 import {
   ActionButtons,
   BatchActionsBar,
@@ -13,7 +13,11 @@ import {
   PageHeader,
 } from "../components";
 import { useTableSelection } from "../hooks/useTableSelection";
-import type { AdminMutationPayload, AdminUserRecord } from "../types";
+import type {
+  AdminMutationPayload,
+  AdminUserRecord,
+  WorkspaceProjectRecord,
+} from "../types";
 import {
   buildBatchActionMessage,
   formatDateTime,
@@ -27,9 +31,11 @@ interface AdminsPageProps {
 }
 
 const INITIAL_VALUES: AdminMutationPayload = {
+  access_scope: "all",
   display_name: "",
   is_enabled: true,
   password: "",
+  project_ids: [],
   role: "analyst",
   username: "",
 };
@@ -37,24 +43,35 @@ const INITIAL_VALUES: AdminMutationPayload = {
 export default function AdminsPage({ onUnauthorized }: AdminsPageProps) {
   const { message } = App.useApp();
   const [form] = Form.useForm<AdminMutationPayload>();
+  const watchedAccessScope = Form.useWatch("access_scope", form);
+  const watchedRole = Form.useWatch("role", form);
   const [items, setItems] = useState<AdminUserRecord[]>([]);
+  const [projects, setProjects] = useState<WorkspaceProjectRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<AdminUserRecord | null>(null);
-  const { clearSelection, rowSelection, selectedItems } = useTableSelection(
-    items,
-    "id",
-  );
+  const { clearSelection, rowSelection, selectedItems } = useTableSelection(items, "id");
 
   useEffect(() => {
     void loadData();
   }, []);
 
+  useEffect(() => {
+    if (watchedRole === "owner" && form.getFieldValue("access_scope") !== "all") {
+      form.setFieldsValue({ access_scope: "all", project_ids: [] });
+    }
+  }, [form, watchedRole]);
+
   async function loadData() {
     setLoading(true);
     try {
-      setItems(await loadAllPages(getAdmins));
+      const [admins, catalog] = await Promise.all([
+        loadAllPages(getAdmins),
+        getWorkspaceCatalog(true),
+      ]);
+      setItems(admins);
+      setProjects(catalog.projects);
     } catch (error) {
       if (normalizeApiError(error) === "UNAUTHORIZED") {
         onUnauthorized();
@@ -75,9 +92,11 @@ export default function AdminsPage({ onUnauthorized }: AdminsPageProps) {
   function openEdit(record: AdminUserRecord) {
     setEditing(record);
     form.setFieldsValue({
+      access_scope: record.access_scope,
       display_name: record.display_name,
       is_enabled: record.is_enabled,
       password: "",
+      project_ids: record.projects.map(project => project.id),
       role: record.role,
       username: record.username,
     });
@@ -88,11 +107,15 @@ export default function AdminsPage({ onUnauthorized }: AdminsPageProps) {
     setSaving(true);
     try {
       const values = await form.validateFields();
+      const payload: AdminMutationPayload = {
+        ...values,
+        project_ids: values.access_scope === "bound" ? values.project_ids || [] : [],
+      };
       if (editing) {
-        await updateAdmin(editing.id, values);
+        await updateAdmin(editing.id, payload);
         message.success("管理员已更新");
       } else {
-        await createAdmin(values);
+        await createAdmin(payload);
         message.success("管理员已创建");
       }
       setDrawerOpen(false);
@@ -111,10 +134,12 @@ export default function AdminsPage({ onUnauthorized }: AdminsPageProps) {
   }
 
   async function handleBatchToggle(is_enabled: boolean) {
-    const result = await runBatchAction(selectedItems, (item) =>
+    const result = await runBatchAction(selectedItems, item =>
       updateAdmin(item.id, {
+        access_scope: item.access_scope,
         display_name: item.display_name,
         is_enabled,
+        project_ids: item.projects.map(project => project.id),
         role: item.role,
         username: item.username,
       }),
@@ -143,29 +168,46 @@ export default function AdminsPage({ onUnauthorized }: AdminsPageProps) {
     { title: "显示名", dataIndex: "display_name", key: "display_name" },
     { title: "角色", dataIndex: "role", key: "role" },
     {
+      title: "访问范围",
+      key: "access_scope",
+      render: (_, record) => (
+        <Tag color={record.access_scope === "bound" ? "gold" : "blue"}>
+          {record.access_scope === "bound" ? "项目绑定" : "全局"}
+        </Tag>
+      ),
+    },
+    {
+      title: "绑定项目",
+      key: "projects",
+      render: (_, record) =>
+        record.projects.length > 0
+          ? record.projects.map(project => (
+            <Tag key={project.id}>{project.name}</Tag>
+          ))
+          : "-",
+    },
+    {
       title: "状态",
       dataIndex: "is_enabled",
       key: "is_enabled",
-      render: (value) => (value ? "启用" : "停用"),
+      render: value => (value ? "启用" : "停用"),
     },
     {
       title: "最近登录",
       dataIndex: "last_login_at",
       key: "last_login_at",
-      render: (value) => formatDateTime(value),
+      render: value => formatDateTime(value),
     },
     {
       title: "创建时间",
       dataIndex: "created_at",
       key: "created_at",
-      render: (value) => formatDateTime(value),
+      render: value => formatDateTime(value),
     },
     {
       title: "操作",
       key: "action",
-      render: (_value, record) => (
-        <ActionButtons onEdit={() => openEdit(record)} />
-      ),
+      render: (_, record) => <ActionButtons onEdit={() => openEdit(record)} />,
     },
   ];
 
@@ -173,7 +215,7 @@ export default function AdminsPage({ onUnauthorized }: AdminsPageProps) {
     <div>
       <PageHeader
         title="管理员"
-        subtitle="创建和维护多管理员账号，按角色分配后台权限"
+        subtitle="维护平台管理员，并为需要隔离的账号绑定可访问项目。"
         extra={
           <Button type="primary" onClick={openCreate}>
             新增管理员
@@ -193,21 +235,15 @@ export default function AdminsPage({ onUnauthorized }: AdminsPageProps) {
 
       <DataTable
         cardTitle="管理员列表"
-        // cardExtra={<Button type="primary" onClick={openCreate}>新增管理员</Button>}
         cardToolbar={
-          <>
-            <BatchActionsBar
-              selectedCount={selectedItems.length}
-              onClear={clearSelection}
-            >
-              <Button onClick={() => void handleBatchToggle(true)}>
-                批量启用
-              </Button>
-              <Button onClick={() => void handleBatchToggle(false)}>
-                批量停用
-              </Button>
-            </BatchActionsBar>
-          </>
+          <BatchActionsBar selectedCount={selectedItems.length} onClear={clearSelection}>
+            <Button onClick={() => void handleBatchToggle(true)}>
+              批量启用
+            </Button>
+            <Button onClick={() => void handleBatchToggle(false)}>
+              批量停用
+            </Button>
+          </BatchActionsBar>
         }
         columns={columns}
         dataSource={items}
@@ -240,7 +276,7 @@ export default function AdminsPage({ onUnauthorized }: AdminsPageProps) {
             name="display_name"
             rules={[{ required: true, message: "请输入显示名" }]}
           >
-            <Input placeholder="例如：运维管理员" />
+            <Input placeholder="例如：项目运维" />
           </Form.Item>
         </Col>
         <Col span={24}>
@@ -258,6 +294,39 @@ export default function AdminsPage({ onUnauthorized }: AdminsPageProps) {
             />
           </Form.Item>
         </Col>
+        <Col span={24}>
+          <Form.Item
+            label="访问范围"
+            name="access_scope"
+            rules={[{ required: true, message: "请选择访问范围" }]}
+          >
+            <Select
+              disabled={watchedRole === "owner"}
+              options={[
+                { label: "全局", value: "all" },
+                { label: "项目绑定", value: "bound" },
+              ]}
+            />
+          </Form.Item>
+        </Col>
+        {watchedAccessScope === "bound" && watchedRole !== "owner" ? (
+          <Col span={24}>
+            <Form.Item
+              label="绑定项目"
+              name="project_ids"
+              rules={[{ required: true, message: "请选择至少一个项目" }]}
+            >
+              <Select
+                mode="multiple"
+                options={projects.map(project => ({
+                  label: project.name,
+                  value: project.id,
+                }))}
+                placeholder="选择允许访问的项目"
+              />
+            </Form.Item>
+          </Col>
+        ) : null}
         <Col span={24}>
           <Form.Item
             label="密码"

@@ -6,17 +6,33 @@ import {
   MAX_RULE_PATTERN_LENGTH,
   MAX_SENDER_PATTERN_LENGTH,
 } from "../utils/constants";
-import { base64ByteLength } from "../utils/utils";
-import type { D1Database, EmailSavePayload, RuleMatch, WorkerEmailMessage } from "../server/types";
+import { base64ByteLength, buildEmailPreview, buildRuleMatchInsights, extractEmailExtraction } from "../utils/utils";
+import type {
+  D1Database,
+  EmailExtractionResult,
+  EmailSavePayload,
+  RuleMatch,
+  RuleMatchInsight,
+  WorkerEmailMessage,
+} from "../server/types";
 
 interface ParsedIncomingEmail extends EmailSavePayload {}
 
 export interface ProcessedEmailResult {
   attachment_count: number;
+  environment_id: number | null;
+  extraction: EmailExtractionResult;
   from: string;
   has_matches: boolean;
+  mailbox_pool_id: number | null;
   message_id: string;
+  preview: string;
+  project_id: number | null;
+  project_ids: number[];
   received_at: number;
+  result_count: number;
+  result_insights: RuleMatchInsight[];
+  results: RuleMatch[];
   subject: string;
   to: string[];
 }
@@ -50,14 +66,32 @@ export async function processIncomingEmail(
       sender_filter: rule.sender_filter,
     })),
   );
+  const preview = buildEmailPreview(parsed.text, parsed.html);
+  const extraction = extractEmailExtraction({
+    fromAddress: parsed.from,
+    htmlBody: parsed.html,
+    preview,
+    results: matches,
+    subject: parsed.subject,
+    textBody: parsed.text,
+  });
 
   const saved = await saveEmail(db, { ...parsed, matches });
   return {
     attachment_count: parsed.attachments.length,
+    environment_id: saved.environment_id,
+    extraction,
     from: parsed.from,
     has_matches: matches.length > 0,
+    mailbox_pool_id: saved.mailbox_pool_id,
     message_id: saved.messageId,
+    preview,
+    project_id: saved.project_id,
+    project_ids: saved.project_ids,
     received_at: saved.receivedAt,
+    result_count: matches.length,
+    result_insights: buildRuleMatchInsights(matches, extraction),
+    results: matches.map(item => ({ ...item })),
     subject: parsed.subject,
     to: parsed.to,
   };

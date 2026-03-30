@@ -22,6 +22,12 @@ export const MAX_MAILBOX_NOTE_LENGTH = 200;
 export const MAX_MAILBOX_TAGS = 20;
 export const MAX_MAILBOX_TAG_LENGTH = 32;
 export const MAX_EMAIL_NOTE_LENGTH = 500;
+export const MAX_WORKSPACE_DESCRIPTION_LENGTH = 280;
+export const MAX_WORKSPACE_NAME_LENGTH = 80;
+export const MAX_WORKSPACE_SLUG_LENGTH = 64;
+export const MAX_SCOPE_BINDINGS = 50;
+export const MAX_API_TOKEN_NAME_LENGTH = 80;
+export const MAX_API_TOKEN_DESCRIPTION_LENGTH = 280;
 export const MAX_OUTBOUND_BODY_LENGTH = 100_000;
 export const MAX_OUTBOUND_ATTACHMENTS = 10;
 export const MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES = 5 * 1024 * 1024;
@@ -41,6 +47,8 @@ export const API_CORS_HEADERS = "Authorization, Content-Type";
 export const NOTIFICATION_EVENTS = [
   "email.received",
   "email.matched",
+  "email.code_extracted",
+  "email.link_extracted",
   "email.deleted",
   "email.restored",
   "mailbox.expired",
@@ -52,12 +60,21 @@ export const NOTIFICATION_EVENTS = [
 ] as const;
 
 export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[number];
+export const ACCESS_SCOPES = ["all", "bound"] as const;
+export const API_TOKEN_PERMISSIONS = [
+  "read:mail",
+  "read:code",
+  "read:attachment",
+  "read:rule-result",
+] as const;
 
 export const ADMIN_ROLE_ORDER: AdminRole[] = ["owner", "admin", "analyst"];
 
 export type AdminPermission =
   | "admins:read"
   | "admins:write"
+  | "api_tokens:read"
+  | "api_tokens:write"
   | "emails:delete"
   | "emails:read"
   | "emails:restore"
@@ -74,11 +91,15 @@ export type AdminPermission =
   | "rules:write"
   | "system:audit"
   | "system:errors"
+  | "workspace:read"
+  | "workspace:write"
   | "whitelist:read"
   | "whitelist:write";
 
 export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
   admin: [
+    "api_tokens:read",
+    "api_tokens:write",
     "emails:read",
     "emails:delete",
     "emails:restore",
@@ -95,6 +116,8 @@ export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
     "rules:write",
     "system:audit",
     "system:errors",
+    "workspace:read",
+    "workspace:write",
     "whitelist:read",
     "whitelist:write",
   ],
@@ -107,11 +130,14 @@ export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
     "outbound:read",
     "rules:read",
     "rules:test",
+    "workspace:read",
     "whitelist:read",
   ],
   owner: [
     "admins:read",
     "admins:write",
+    "api_tokens:read",
+    "api_tokens:write",
     "emails:read",
     "emails:delete",
     "emails:restore",
@@ -128,6 +154,8 @@ export const ROLE_PERMISSIONS: Record<AdminRole, AdminPermission[]> = {
     "rules:write",
     "system:audit",
     "system:errors",
+    "workspace:read",
+    "workspace:write",
     "whitelist:read",
     "whitelist:write",
   ],

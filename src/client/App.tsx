@@ -11,9 +11,11 @@ import { normalizeApiError } from "./utils";
 const { Content } = Layout;
 
 const ApiDocsPage = lazy(() => import("./pages/ApiDocsPage"));
+const ApiTokensPage = lazy(() => import("./pages/ApiTokensPage"));
 const AdminsPage = lazy(() => import("./pages/AdminsPage"));
 const AuditLogsPage = lazy(() => import("./pages/AuditLogsPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const DomainsPage = lazy(() => import("./pages/DomainsPage"));
 const EmailDetailPage = lazy(() => import("./pages/EmailDetailPage"));
 const EmailsPage = lazy(() => import("./pages/EmailsPage"));
 const ErrorsPage = lazy(() => import("./pages/ErrorsPage"));
@@ -21,6 +23,7 @@ const LoginPage = lazy(() => import("./pages/LoginPage"));
 const MailboxesPage = lazy(() => import("./pages/MailboxesPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
 const OutboundEmailsPage = lazy(() => import("./pages/OutboundEmailsPage"));
+const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
 const RulesPage = lazy(() => import("./pages/RulesPage"));
 const TrashPage = lazy(() => import("./pages/TrashPage"));
 const WhitelistPage = lazy(() => import("./pages/WhitelistPage"));
@@ -31,6 +34,8 @@ function getBreadcrumbs(pathname: string) {
   const items: Array<{ path?: string; title: string }> = [{ title: "首页", path: "/monitor" }];
 
   if (pathname.startsWith("/monitor")) items.push({ title: "监控中心" });
+  if (pathname.startsWith("/projects")) items.push({ title: "项目空间" });
+  if (pathname.startsWith("/domains")) items.push({ title: "域名资产" });
   if (pathname.startsWith("/emails/")) items.push({ title: "邮件中心", path: "/emails" }, { title: "邮件详情" });
   if (pathname === "/emails") items.push({ title: "邮件中心" });
   if (pathname.startsWith("/trash")) items.push({ title: "回收站" });
@@ -40,9 +45,10 @@ function getBreadcrumbs(pathname: string) {
   if (pathname.startsWith("/outbound")) items.push({ title: "发信中心" });
   if (pathname.startsWith("/admins")) items.push({ title: "管理员" });
   if (pathname.startsWith("/notifications")) items.push({ title: "通知配置" });
+  if (pathname.startsWith("/api-tokens")) items.push({ title: "API Token" });
   if (pathname.startsWith("/system/audit")) items.push({ title: "审计日志" });
   if (pathname.startsWith("/system/errors")) items.push({ title: "系统日志" });
-  if (pathname.startsWith("/api")) items.push({ title: "开放 API" });
+  if (pathname === "/api" || pathname.startsWith("/api/")) items.push({ title: "开放 API" });
 
   return items;
 }
@@ -85,15 +91,18 @@ function DashboardShell({
               <Routes>
                 <Route path="/" element={<Navigate to="/monitor" replace />} />
                 <Route path="/monitor" element={<DashboardPage domains={domains} mailboxDomain={mailboxDomain} onUnauthorized={onUnauthorized} />} />
+                <Route path="/projects" element={<ProjectsPage onUnauthorized={onUnauthorized} />} />
+                <Route path="/domains" element={<DomainsPage onDomainsChanged={onMailboxesChanged} onUnauthorized={onUnauthorized} />} />
                 <Route path="/emails" element={<EmailsPage domains={domains} onUnauthorized={onUnauthorized} />} />
                 <Route path="/emails/:messageId" element={<EmailDetailPage onUnauthorized={onUnauthorized} />} />
                 <Route path="/trash" element={<TrashPage onUnauthorized={onUnauthorized} />} />
                 <Route path="/rules" element={<RulesPage onUnauthorized={onUnauthorized} />} />
                 <Route path="/whitelist" element={<WhitelistPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/mailboxes" element={<MailboxesPage mailboxDomain={mailboxDomain} onMailboxesChanged={onMailboxesChanged} onUnauthorized={onUnauthorized} />} />
+                <Route path="/mailboxes" element={<MailboxesPage domains={domains} mailboxDomain={mailboxDomain} onMailboxesChanged={onMailboxesChanged} onUnauthorized={onUnauthorized} />} />
                 <Route path="/outbound" element={<OutboundEmailsPage onUnauthorized={onUnauthorized} />} />
                 <Route path="/admins" element={<AdminsPage onUnauthorized={onUnauthorized} />} />
                 <Route path="/notifications" element={<NotificationsPage onUnauthorized={onUnauthorized} />} />
+                <Route path="/api-tokens" element={<ApiTokensPage onUnauthorized={onUnauthorized} />} />
                 <Route path="/system/audit" element={<AuditLogsPage onUnauthorized={onUnauthorized} />} />
                 <Route path="/system/errors" element={<ErrorsPage onUnauthorized={onUnauthorized} />} />
                 <Route path="/api" element={<ApiDocsPage mailboxDomain={mailboxDomain} />} />
@@ -126,6 +135,9 @@ export default function App() {
     try {
       const payload = await getDomains();
       setDomains(payload.domains);
+      if (payload.default_domain) {
+        setMailboxDomain(payload.default_domain);
+      }
     } catch (error) {
       if (normalizeApiError(error) === "UNAUTHORIZED") {
         handleUnauthorized();

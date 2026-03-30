@@ -3,8 +3,11 @@ import test from "node:test";
 
 import {
   clearAdminSessionCookie,
+  createManagedApiTokenValue,
   createBootstrapSessionCookie,
+  getManagedApiTokenId,
   getAdminSessionFromRequest,
+  hashApiTokenValue,
   isApiAuthorized,
 } from "../src/core/auth";
 
@@ -62,4 +65,15 @@ test("bearer tokens continue to work for admin and api access", async () => {
 test("clear session cookie expires immediately", () => {
   const cookie = clearAdminSessionCookie(new Request("https://example.com/auth/logout", { method: "POST" }));
   assert.match(cookie, /Max-Age=0/);
+});
+
+test("managed api tokens expose embedded id and hash consistently", async () => {
+  const token = createManagedApiTokenValue("token-123");
+
+  assert.equal(getManagedApiTokenId(token), "token-123");
+  assert.equal(getManagedApiTokenId("invalid-token"), null);
+
+  const hashA = await hashApiTokenValue(token);
+  const hashB = await hashApiTokenValue(` ${token} `);
+  assert.equal(hashA, hashB);
 });

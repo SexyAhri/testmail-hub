@@ -1,70 +1,105 @@
-# Temp Mail Console
+# TestMail Hub
 
-基于 `Cloudflare Workers + D1 + React + Vite + TypeScript + Ant Design` 构建的临时邮箱管理控制台，支持收信、规则提取、白名单、邮箱资产管理、管理员体系、Webhook 通知、系统日志中心，以及可视化发信中心。
+基于 `Cloudflare Workers + D1 + React + Vite + TypeScript + Ant Design` 构建的团队测试邮箱与验证码中台。
+
+它不是面向大众的“临时邮箱站”，而是一套更偏团队内部使用、自动化测试、私有部署和邮件资产治理的控制台，覆盖收件、提取、规则、白名单、项目隔离、Webhook、API Token、发信中心和系统日志。
 
 ## 项目定位
 
-这个项目的核心目标不是做一个简单的临时邮箱接口，而是做成一套可实际使用的邮件运营后台：
+推荐对外口径：
 
-- 收取并存储完整邮件正文
-- 提取验证码与规则命中结果
-- 管理邮箱资产、白名单、规则和管理员
-- 可视化查看审计日志与错误日志
-- 接入 Resend 做后台发信
-- 与 Cloudflare Email Routing / Workers / D1 配合使用
+- 团队测试邮箱与验证码中台
+- 私有部署邮件资产管理后台
+- 自动化测试邮件平台
 
-## 功能概览
+## 当前已实现的能力
 
-### 收件能力
+### 邮件接收与查看
 
-- 完整存储邮件正文
-- 存储附件元数据并支持附件下载
-- 支持单封邮件删除、恢复、彻底删除
-- 邮件详情页查看正文、头信息、附件、规则命中结果
-- 自动提取常见验证码，支持纯数字和数字字母混合验证码
-- 支持邮件标签、备注
+- 完整存储邮件正文、头信息、附件元数据
+- 邮件详情页支持查看正文、规则命中、提取结果、附件下载
+- 支持单封删除、恢复、彻底删除
+- 支持标签、备注、验证码列展示与复制
+- 支持回收站页面
 
-### 筛选与规则
+### 验证码 / 链接提取
 
-- 邮件列表多条件搜索
-- 规则管理、规则测试器
-- 白名单管理
+- 提取常见数字验证码和数字字母混合验证码
+- 提取验证链接、登录链接、魔法链接、重置链接、邀请链接
+- 识别 GitHub、Google、Apple、PayPal、Steam、Discord、Microsoft、Amazon、Notion、Slack、OpenAI 等常见平台邮件
+- API 与 Webhook 可返回提取结果
+
+### 规则与白名单
+
+- 规则 CRUD 与规则测试器
+- 白名单 CRUD
 - 全局白名单开关
-- 更细化的验证码 / 平台邮件识别规则
+- 更细化的常见平台识别规则
 
-### 邮箱资产管理
+### 邮箱资产与多域名
 
-- 邮箱生成与管理
-- 支持随机生成邮箱
-- 支持生命周期与启停控制
-- 支持与 Cloudflare Email Routing 路由同步
+- 邮箱生成、启停、批量创建、到期控制
+- Cloudflare Email Routing 路由同步
+- 多域名资产管理
+- 域名与项目 / 环境绑定
+- 按工作空间过滤域名池与默认域名
+- Catch-all 策略管理与同步
+- 域名维度监控卡片、排行图表、接入概览
 
-### 管理后台能力
+### 项目 / 环境隔离
+
+- 项目、环境、邮箱池三层模型
+- 邮件、邮箱、域名、Webhook、API Token 支持项目范围
+- 项目级管理员绑定
+- 工作空间目录接口与后台管理页面
+
+### 管理与治理
 
 - 管理员登录与 Session
-- 多管理员与角色权限
+- Bootstrap Token 登录
+- 管理员、项目绑定、访问范围控制
 - 审计日志
-- 系统日志中心
-- Webhook 通知
-- 错误事件采集与展示
+- 系统错误日志中心
+
+### API 与自动化
+
+- 托管 API Token
+- Token 权限拆分
+- Project-scoped API Token
+- 公共 API：
+  - `GET /api/emails/latest`
+  - `GET /api/emails/latest/extraction`
+  - `GET /api/emails/code`
+  - `GET /api/emails/:messageId`
+  - `GET /api/emails/:messageId/extractions`
+  - `GET /api/emails/:messageId/attachments/:attachmentId`
+
+### Webhook
+
+- 邮件接收、命中、验证码提取、链接提取等事件推送
+- Secret 签名
+- 投递记录
+- 自动重试
+- 手动重放
+- Project-scoped Webhook
 
 ### 发信中心
 
 - Resend 接入
 - 发信设置可视化管理
-- 草稿 / 定时 / 发送记录
+- 草稿、立即发送、计划发送
+- 发信记录、发送统计
 - 模板管理
 - 联系人管理
-- 外部邮箱发信开关
+- 外部收件人开关
 
 ### 工程能力
 
-- React + TypeScript 前后端统一 TS
-- Vite 构建
-- 懒加载拆包
+- 全仓统一 TypeScript
+- React + Vite 前端
+- Cloudflare Workers + D1 部署
 - GitHub Actions CI / CD
-- Docker 一键启动本地容器
-- Docker 一键发布到 Cloudflare
+- Docker 本地运行支持
 
 ## 页面截图
 
@@ -88,40 +123,50 @@
 
 ![发信中心](images/outbound.png)
 
-### API 文档页
+### API 文档
 
-![API 文档页](images/api.png)
+![API 文档](images/api.png)
 
-## 目录结构
+## 项目结构
 
 ```text
 .
 ├─ src/
-│  ├─ client/        React 管理后台前端
-│  ├─ core/          鉴权、数据库、发信、通知、Cloudflare 同步等核心逻辑
-│  ├─ handlers/      Worker 接口处理器
-│  ├─ server/        前后端共享类型
-│  ├─ utils/         常量与工具函数
-│  └─ index.ts       Worker 入口
-├─ migrations/       D1 数据库迁移
-├─ images/           README 截图
-├─ docs/             补充文档
-├─ test/             单元测试与 E2E
+│  ├─ client/         React 管理后台
+│  ├─ core/           鉴权、数据库、发信、通知、Cloudflare 同步等核心逻辑
+│  ├─ handlers/       Worker 路由处理
+│  ├─ server/         前后端共享类型
+│  ├─ utils/          常量与工具函数
+│  └─ index.ts        Worker 入口
+├─ migrations/        D1 迁移脚本
+├─ docs/              部署、Secrets、计划书等文档
+├─ images/            README 截图
+├─ test/              单元测试与 E2E
 ├─ Dockerfile
 ├─ docker-compose.yml
-├─ vite.config.ts
-└─ wrangler.toml
+├─ wrangler.toml
+└─ package.json
 ```
+
+## 技术栈
+
+- Runtime: Cloudflare Workers
+- Database: Cloudflare D1
+- Frontend: React 19 + Vite 7 + TypeScript 5
+- UI: Ant Design 5 + ECharts
+- Mail Parse: `postal-mime`
+- Outbound: Resend
+- CI/CD: GitHub Actions + Wrangler
 
 ## 环境要求
 
 - Node.js 20+
 - npm 10+
-- Docker / Docker Compose（如需容器化）
-- Cloudflare 账号（如需正式部署）
-- Resend 账号（如需后台发信）
+- Cloudflare 账号
+- Resend 账号（仅发信中心需要）
+- Docker / Docker Compose（可选，仅本地容器运行时需要）
 
-## 快速开始
+## 本地快速开始
 
 ### 1. 安装依赖
 
@@ -129,296 +174,245 @@
 npm install
 ```
 
-### 2. 配置 `.dev.vars`
-
-先复制示例文件：
+### 2. 准备本地环境变量
 
 ```bash
 copy .dev.vars.example .dev.vars
 ```
 
-然后按实际情况填写。
+至少填好这些值：
 
-## 环境变量说明
+- `ADMIN_TOKEN`
+- `API_TOKEN`
+- `SESSION_SECRET`
+- `MAILBOX_DOMAIN`
 
-| 变量名 | 是否必填 | 说明 |
-| --- | --- | --- |
-| `ADMIN_TOKEN` | 建议必填 | 初始管理员登录令牌，可作为 bootstrap 登录方式 |
-| `API_TOKEN` | 建议必填 | 公共 API `/api/emails/latest` 调用令牌 |
-| `SESSION_SECRET` | 强烈建议必填 | 管理后台 Session 签名密钥 |
-| `MAILBOX_DOMAIN` | 收件建议必填 | 当前主收件域名，也是邮箱创建默认域名 |
-| `FORWARD_TO` | 可选 | 原始邮件转发地址 |
-| `ALLOWED_API_ORIGINS` | 可选 | 允许跨域访问 `/api/*` 的浏览器来源，多个用逗号分隔 |
-| `ERROR_WEBHOOK_URL` | 可选 | 错误事件回调地址 |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare 同步 / 部署时需要 | 用于 Email Routing 同步，也可供 Docker / CI 中的 Wrangler 部署使用 |
-| `CLOUDFLARE_ZONE_ID` | Cloudflare 同步时需要 | 主收件域名对应的 Zone ID |
-| `CLOUDFLARE_EMAIL_WORKER` | 可选 | Email Routing 绑定的 Worker 名称，默认 `temp-email-worker` |
-| `CLOUDFLARE_ACCOUNT_ID` | Docker / CI 发布时建议填写 | 供 Wrangler 在非交互环境中发布 Worker |
-| `RESEND_API_KEY` | 发信时必填 | Resend API Key |
-| `RESEND_FROM_DOMAIN` | 发信时必填 | 已验证的发信域名 |
-| `RESEND_DEFAULT_FROM_NAME` | 发信时建议填写 | 默认发件人名称 |
-| `RESEND_DEFAULT_FROM` | 发信时建议填写 | 默认发件地址 |
-| `RESEND_DEFAULT_REPLY_TO` | 可选 | 默认回复地址 |
+如果你要本地调试 Cloudflare 路由同步，还需要：
 
-示例：
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ZONE_ID`
+- `CLOUDFLARE_EMAIL_WORKER`
 
-```env
-ADMIN_TOKEN=<set-admin-token>
-API_TOKEN=<set-api-token>
-SESSION_SECRET=<set-session-secret>
-MAILBOX_DOMAIN=vixenahri.cn
-FORWARD_TO=
-ALLOWED_API_ORIGINS=
-ERROR_WEBHOOK_URL=
-CLOUDFLARE_API_TOKEN=
-CLOUDFLARE_ZONE_ID=
-CLOUDFLARE_EMAIL_WORKER=temp-email-worker
-CLOUDFLARE_ACCOUNT_ID=
-RESEND_API_KEY=
-RESEND_FROM_DOMAIN=vixenahri.cn
-RESEND_DEFAULT_FROM_NAME=Ahri TempMail Console
-RESEND_DEFAULT_FROM=TempMail@vixenahri.cn
-RESEND_DEFAULT_REPLY_TO=
-```
+如果你要调试发信中心，还需要：
 
-## 本地开发
+- `RESEND_API_KEY`
+- `RESEND_FROM_DOMAIN`
+- `RESEND_DEFAULT_FROM`
 
-### 初始化本地数据库
+### 3. 初始化本地 D1
 
 ```bash
 npm run db:migrate:local
 ```
 
-### 启动开发环境
+### 4. 启动开发环境
 
 ```bash
 npm run dev
 ```
 
-默认会启动本地开发环境，前端与 Worker 接口一起工作。
+默认访问：
 
-### 常用命令
+```text
+http://127.0.0.1:4173
+```
+
+### 5. 常用命令
 
 ```bash
 npm run typecheck
 npm test
 npm run build
-npm run e2e
+npm run check
 ```
 
-## Docker 一键部署
-
-这个仓库现在内置了：
-
-- `Dockerfile`
-- `docker-compose.yml`
-- `docker/entrypoint.sh`
-
-### 方式一：Docker 一键启动本地容器
-
-这个模式适合：
-
-- 本地体验 UI
-- 内网自测
-- 让团队成员快速跑起来
-- 在容器中保留本地 D1 数据
-
-启动命令：
+如果本机已经装了 Chrome，想直接跑登录冒烟：
 
 ```bash
-docker compose up -d --build temp-mail-console
+npx playwright test test/e2e/login.spec.ts -c playwright.local.config.ts
 ```
 
-访问地址：
+## 核心环境变量
 
-```text
-http://localhost:4173
+| 变量名                     | 建议级别            | 说明                                |
+| -------------------------- | ------------------- | ----------------------------------- |
+| `ADMIN_TOKEN`              | 必填                | Bootstrap 管理员登录令牌            |
+| `API_TOKEN`                | 必填                | 全局公共 API 令牌                   |
+| `SESSION_SECRET`           | 必填                | 后台 Session 签名密钥               |
+| `MAILBOX_DOMAIN`           | 强烈建议            | 默认邮箱域名，也是回退主域名        |
+| `FORWARD_TO`               | 可选                | 原始邮件转发地址                    |
+| `ALLOWED_API_ORIGINS`      | 可选                | 允许跨域访问 `/api/*` 的浏览器源    |
+| `ERROR_WEBHOOK_URL`        | 可选                | 错误事件回调地址                    |
+| `CLOUDFLARE_API_TOKEN`     | 路由同步 / 部署需要 | Cloudflare API Token                |
+| `CLOUDFLARE_ZONE_ID`       | 路由同步需要        | 默认主域名对应 Zone ID              |
+| `CLOUDFLARE_EMAIL_WORKER`  | 路由同步建议        | Email Routing 指向的 Worker 名称    |
+| `CLOUDFLARE_ACCOUNT_ID`    | CI/CD 建议          | GitHub Actions / Docker deploy 使用 |
+| `RESEND_API_KEY`           | 发信需要            | Resend API Key                      |
+| `RESEND_FROM_DOMAIN`       | 发信需要            | 已验证的发件域名                    |
+| `RESEND_DEFAULT_FROM_NAME` | 发信建议            | 默认发件人名称                      |
+| `RESEND_DEFAULT_FROM`      | 发信建议            | 默认发件地址                        |
+| `RESEND_DEFAULT_REPLY_TO`  | 可选                | 默认 Reply-To                       |
+
+完整示例见 [.dev.vars.example](.dev.vars.example)。
+
+## 登录方式
+
+当前支持两种登录方式：
+
+- 使用 `ADMIN_TOKEN` 进行 Bootstrap 登录
+- 创建正式管理员账号后，使用用户名 + 密码登录
+
+推荐做法：
+
+1. 首次部署后先用 `ADMIN_TOKEN` 登录。
+2. 进入后台创建正式管理员。
+3. 后续主要使用正式管理员账号。
+4. 保留 `ADMIN_TOKEN` 作为应急入口，不对外公开。
+
+## 公共 API 快速示例
+
+Windows PowerShell 推荐这样调用：
+
+```powershell
+$headers = @{ Authorization = "Bearer <API_TOKEN>" }
+Invoke-RestMethod -Uri "https://your-domain/api/emails/latest?address=code@your-domain" -Headers $headers
 ```
 
-常用命令：
+常见用途：
 
-```bash
-docker compose logs -f temp-mail-console
-docker compose restart temp-mail-console
-docker compose down
-```
+- 拉取最新地址的最新邮件
+- 直接获取验证码
+- 获取提取结果
+- 下载附件
+- 用托管 Token 做项目级自动化测试接入
 
-这个模式会自动执行：
+完整接口说明可在后台 `API 文档` 页面查看。
 
-1. 容器内安装依赖
-2. 执行本地 D1 迁移
-3. 启动开发服务
-4. 将 `.wrangler` 挂载到命名卷 `wrangler_state`，保留本地数据库状态
+## 后台页面一览
 
-### 方式二：Docker 一键发布到 Cloudflare
+当前已经有这些页面：
 
-这个模式不是在 Docker 里长期运行 Worker，而是通过容器执行一次正式发布。
+- 监控中心
+- 项目空间
+- 域名资产
+- 邮件中心
+- 邮件详情
+- 回收站
+- 规则管理
+- 白名单
+- 邮箱资产
+- 发信中心
+- 管理员
+- 通知配置
+- API Token
+- 审计日志
+- 系统日志
+- API 文档
 
-运行前请确保：
+## GitHub Actions 持续部署
 
-- `.dev.vars` 已配置完整
-- `CLOUDFLARE_API_TOKEN` 可用于 Wrangler 发布
-- `CLOUDFLARE_ACCOUNT_ID` 已提供
-- D1 绑定与 `wrangler.toml` 已配置正确
+推荐把 GitHub Actions 作为唯一正式发布入口。
 
-发布命令：
+当前仓库内置：
 
-```bash
-docker compose --profile deploy run --rm temp-mail-console-deploy
-```
+- [.github/workflows/ci.yml](.github/workflows/ci.yml)
+- [.github/workflows/deploy.yml](.github/workflows/deploy.yml)
 
-它会自动执行：
+默认流程：
 
-1. `npm run typecheck`
-2. `npm test`
-3. `npm run deploy`
-4. 自动构建前端与 Worker
-5. 自动执行远程 D1 迁移
-6. 自动发布 Worker
+1. Push 到 `main` 或 `master`
+2. 运行 `typecheck`
+3. 运行 `test`
+4. 运行 `build`
+5. 导出远程 D1 备份
+6. 同步 Worker Secrets
+7. 执行远程迁移
+8. 发布 Worker
 
-### Docker 使用说明
+重要说明：
 
-- 本地容器模式主要用于开发 / 测试 / 内网预览
-- 正式线上运行环境仍然是 Cloudflare Workers，不是 Docker 容器常驻托管
-- 如果你要真正接收公网邮件，仍然需要在 Cloudflare 上配置 Email Routing 指向当前 Worker
+- 正常部署不会重置线上数据库数据。
+- `deploy.yml` 只会执行 `wrangler d1 migrations apply DB --remote`。
+- 只有你自己写了破坏性迁移 SQL，才会影响已有数据。
 
-## Cloudflare 正式部署
-
-### 本地命令部署
-
-```bash
-npm run deploy
-```
-
-这个命令会执行：
-
-1. 前端构建
-2. Worker 构建
-3. 远程 D1 迁移
-4. `wrangler deploy`
-
-### 正式部署前建议检查
-
-- `wrangler.toml` 中的 `d1_databases` 是否正确
-- 自定义域名是否已经绑定 Worker
-- `ADMIN_TOKEN` / `API_TOKEN` / `SESSION_SECRET` 是否已配置为 secret
-- `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ZONE_ID` / `CLOUDFLARE_EMAIL_WORKER` 是否已配置，避免邮箱同步失败
-- `RESEND_API_KEY` 是否已配置，避免发信中心发送失败
-
-## GitHub Actions / 持续部署
-
-仓库已经包含 GitHub Actions 工作流。
-
-相关文档见：
-
-- [docs/CI-CD.md](docs/CI-CD.md)
-
-如果你使用 GitHub 自动部署到 Cloudflare，建议同时配置：
-
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
-- `ADMIN_TOKEN`
-- `API_TOKEN`
-- `SESSION_SECRET`
-- 其余发信 / 路由 / 域名变量按需补齐
-
-## 自动部署方案
-
-现在项目统一使用 `GitHub Actions` 做自动部署，不再推荐同时启用 Cloudflare Git 直连部署。
-
-这样做的原因很直接：
-
-- 备份、迁移、发布走同一条链路
-- 不会重复部署
-- 出问题时更容易排查
-- 生产数据库迁移不会和别的发布系统打架
-
-当前默认行为：
-
-- Push 到 `main`
-- 或 Push 到 `master`
-
-都会自动触发：
-
-1. `npm run typecheck`
-2. `npm test`
-3. `npm run build`
-4. 远程 D1 备份
-5. 远程 D1 迁移
-6. Worker 发布
-
-详细配置和 Secrets 清单见：
+详细见：
 
 - [docs/CI-CD.md](docs/CI-CD.md)
 - [docs/GITHUB-SECRETS.md](docs/GITHUB-SECRETS.md)
 
-## 多域名支持说明
+## 品牌与仓库命名
 
-### 现在能不能配置多个域名？
+当前项目品牌统一为：
 
-可以分成两层理解：
+- 产品名：`TestMail Hub`
+- GitHub 仓库名：`testmail-hub`
 
-#### 1. 数据层 / 展示层
+兼容性说明：
 
-这部分是可以识别多个域名的：
+- 这次只统一项目品牌、文档、包名和本地仓库命名
+- Cloudflare Worker 名仍保留为 `temp-email-worker`
+- 这样可以避免立刻影响现有自定义域名、Email Routing、Worker secrets 和 D1 绑定
 
-- 邮件列表可以按域名筛选
-- 后台统计可以展示多个域名
-- 数据库里可以存在多个域名的邮箱地址和邮件记录
-- 如果多个域名的邮件都已经正确路由到同一个 Worker，系统也能正常收取并展示
+## 多域名支持现状
 
-#### 2. 系统默认配置 / Cloudflare 自动同步层
+当前已经支持：
 
-这部分当前还是“单主域名模式”：
+- 多域名资产录入
+- `domain -> zone_id -> email_worker` 基础映射
+- 域名 Catch-all 策略
+- 域名状态监控
+- 域名与项目 / 环境绑定
+- 邮箱创建时按工作空间过滤可选域名
+- 推荐默认域名
 
-- `MAILBOX_DOMAIN` 目前是单值
-- `CLOUDFLARE_ZONE_ID` 目前对应单个 Zone
-- 邮箱生成默认使用一个主域名
-- Cloudflare Email Routing 自动同步也按一个主域名工作
+当前还没有完全做完：
 
-也就是说：
+- 独立的 routing profile 模型
+- 多 provider 抽象
+- 更细的域名权限模型
+- 更完整的域名级策略中心
 
-- 当前项目“可识别多域名数据”
-- 但“自动生成 + 自动同步 + 主配置”仍然是单域名
+所以现在它已经不是“只能识别多域名”，而是已经具备一版“多域名资产中心”，但还没到最终形态。
 
-### 如果你要做完整多域名
+## Docker 说明
 
-下一步需要把这些配置扩成映射关系，例如：
+仓库保留了 Docker 相关文件，主要用于：
 
-- `domain -> zone_id`
-- `domain -> worker routing config`
-- 管理后台创建邮箱时可选择多个已接入域名
-- 同步接口按邮箱所属域名写入对应 Zone
+- 本地体验
+- 内网预览
+- 非 Cloudflare 正式环境下的开发调试
 
-如果你后面要做这块，我建议直接改成“多域名资产中心”，不要只改一个环境变量。
+正式线上仍然推荐：
 
-## 已知限制
+- Cloudflare Workers 运行时
+- GitHub Actions 持续部署
 
-- Docker 本地模式不能替代 Cloudflare Workers 正式线上环境
-- Cloudflare 邮箱同步当前只支持单主域名
-- 发信能力依赖 Resend，发件域名必须先在 Resend 完成验证
-- 收件是否成功最终取决于 Cloudflare Email Routing 是否已经把邮件路由到这个 Worker
+## 常见问题
 
-## 故障排查
+### 1. GitHub Actions 部署会不会清空线上数据库？
 
-### 访问到了域名，但页面空白
+不会。
+
+当前工作流会先尝试导出远程 D1 备份，然后只执行待应用的迁移，再部署 Worker，不会无条件重建数据库。
+
+### 2. 自定义域名访问正常但没有页面怎么办？
 
 优先检查：
 
-- `wrangler.toml` 的 `[assets]` 配置
-- 是否已经执行 `npm run build` 后重新部署
-- 自定义域名是否指向当前 Worker
+- `wrangler.toml` 里的 `[assets]` 配置
+- 是否已重新执行构建并部署
+- 自定义域名是否已经正确绑定到当前 Worker
 
-### 邮箱能创建，但 Cloudflare 没有同步路由
+### 3. 邮箱创建成功但 Cloudflare 路由没同步怎么办？
 
 优先检查：
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ZONE_ID`
 - `CLOUDFLARE_EMAIL_WORKER`
-- 邮箱地址是否属于 `MAILBOX_DOMAIN`
+- 域名资产里该域名是否有正确 Zone / Worker 配置
 
-### 发信失败
+### 4. 发信失败怎么办？
 
 优先检查：
 
@@ -427,23 +421,40 @@ npm run deploy
 - `RESEND_DEFAULT_FROM`
 - 当前发件地址是否属于已验证域名
 
-### 管理员新增失败 / 权限拒绝
+### 5. 管理员新增失败或权限异常怎么办？
 
-请到后台查看：
+先看后台：
 
 - 审计日志
-- 系统日志中心
+- 系统日志
 
-日志中心已经记录这类关键业务错误。
+当前系统已经会记录管理员新增失败、权限拒绝、Cloudflare 同步失败、Resend 发送失败等关键错误。
 
-## 推荐运维习惯
+## 当前已知限制
 
-- 先用 `ADMIN_TOKEN` 完成 bootstrap 登录，再创建正式管理员账号
-- `SESSION_SECRET` 不要留空
-- 生产环境优先使用 Cloudflare secret，不要把敏感值直接写进仓库
-- 部署前先执行一次 `npm run typecheck` 和 `npm test`
-- 对外发信前先确认 Resend 域名验证完成
+- 验证码提取准确率仍在持续优化中
+- 多域名已可运营，但 routing profile 还未独立建模
+- 团队角色体系还没细化到 `platform_admin / project_admin / operator / viewer`
+- retention 策略还没有完整后台配置中心
+- 自定义域名绑定和 DNS 仍需在 Cloudflare 控制台手动完成
+
+## 发布前检查
+
+上传或发布前建议确认：
+
+- `.dev.vars` 没有提交
+- `.wrangler/` 没有提交
+- 没有把真实 Token、API Key、Session Secret 写进仓库
+- `npm run check` 可以通过
+- 文档与当前代码状态一致
+
+## 相关文档
+
+- [CI/CD 说明](docs/CI-CD.md)
+- [GitHub Secrets 清单](docs/GITHUB-SECRETS.md)
+- [产品与研发计划书](docs/产品与研发计划书.md)
+- [计划书实现对照表](docs/计划书实现对照表.md)
 
 ## License
 
-仅供当前项目内部使用，如需开源或商用请按你的实际需求补充许可证。
+当前仓库默认按内部项目使用处理；如果你后续要公开发布或商业化，请自行补充正式许可证说明。

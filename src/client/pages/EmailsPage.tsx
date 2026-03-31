@@ -5,6 +5,7 @@ import {
   DownloadOutlined,
   EyeOutlined,
   GlobalOutlined,
+  InboxOutlined,
   PaperClipOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -15,7 +16,7 @@ import dayjs, { type Dayjs } from "dayjs";
 import { useEffect, useMemo, useState, type ComponentProps } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { buildEmailSearchParams, buildExportUrl, deleteEmail, getEmails, getWorkspaceCatalog } from "../api";
+import { archiveEmail, buildEmailSearchParams, buildExportUrl, deleteEmail, getEmails, getWorkspaceCatalog } from "../api";
 import { BatchActionsBar, DataTable, MetricCard, PageHeader, SearchToolbar } from "../components";
 import { useTableSelection } from "../hooks/useTableSelection";
 import type { EmailSummary, WorkspaceCatalog } from "../types";
@@ -230,6 +231,22 @@ export default function EmailsPage({ domains, onUnauthorized }: EmailsPageProps)
     }
   }
 
+  async function handleBatchArchive() {
+    const result = await runBatchAction(selectedEmails, item => archiveEmail(item.message_id));
+    if (result.successCount > 0) {
+      await reloadAfterBatch(result.successCount);
+    }
+
+    const messageText = buildBatchActionMessage("批量归档", result);
+    if (result.failureCount === 0) {
+      message.success(messageText);
+    } else if (result.successCount > 0) {
+      message.warning(messageText);
+    } else {
+      message.error(messageText);
+    }
+  }
+
   const columns: ColumnsType<EmailSummary> = [
     {
       title: "邮件主题",
@@ -362,6 +379,9 @@ export default function EmailsPage({ domains, onUnauthorized }: EmailsPageProps)
             </Button>
             <Button type="primary" onClick={() => navigate("/trash")}>
               回收站
+            </Button>
+            <Button onClick={() => navigate("/archives")}>
+              归档中心
             </Button>
           </Space>
         )}
@@ -534,6 +554,9 @@ export default function EmailsPage({ domains, onUnauthorized }: EmailsPageProps)
         cardTitle="邮件列表"
         cardToolbar={(
           <BatchActionsBar selectedCount={selectedEmails.length} onClear={clearSelectedEmails}>
+            <Button icon={<InboxOutlined />} onClick={() => void handleBatchArchive()}>
+              批量归档
+            </Button>
             <Popconfirm
               title={`确定删除选中的 ${selectedEmails.length} 封邮件吗？`}
               onConfirm={() => void handleBatchDelete()}

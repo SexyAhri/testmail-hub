@@ -7,12 +7,15 @@ import {
   isApiAuthorized,
 } from "./core/auth";
 import {
-  clearExpiredEmails,
+  addAuditLog,
+  applyRetentionPoliciesPurge,
+  createRetentionJobRun,
   disableExpiredMailboxes,
   getActiveApiTokenById,
   getAdminAccessContext,
-  purgeDeletedEmails,
   touchApiTokenLastUsed,
+  type RetentionAffectedEmailRecord,
+  type RetentionScopeSummaryRecord,
 } from "./core/db";
 import { captureError } from "./core/errors";
 import { processIncomingEmail } from "./core/logic";
@@ -23,16 +26,253 @@ import {
   EXPIRED_EMAIL_RETENTION_HOURS,
   PURGE_DELETED_EMAILS_AFTER_HOURS,
 } from "./utils/constants";
-import { applyCors, getCorsHeaders, jsonError } from "./utils/utils";
+import { applyCors, getCorsHeaders, json, jsonError } from "./utils/utils";
 import { isSqliteConstraintError, isSqliteSchemaError } from "./utils/utils";
 import type { AdminPermission } from "./utils/constants";
 import type {
+  MailboxRecord,
   ApiTokenPermission,
   AuthSession,
   WorkerEnv,
   WorkerExecutionContext,
   WorkerEmailMessage,
 } from "./server/types";
+
+const MAX_RETENTION_DETAIL_EMAILS = 50;
+const MAX_RETENTION_DETAIL_SCOPES = 50;
+const MAX_RETENTION_DETAIL_MAILBOXES = 50;
+const SCHEDULED_RETENTION_ACTOR = {
+  display_name: "系统留存任务",
+  role: "owner" as const,
+  user_id: "system-retention",
+};
+
+function toRetentionEmailSample(record: RetentionAffectedEmailRecord) {
+  return {
+    deleted_at: record.deleted_at,
+    environment_id: record.environment_id,
+    mailbox_pool_id: record.mailbox_pool_id,
+    message_id: record.message_id,
+    project_id: record.project_id,
+    received_at: record.received_at,
+  };
+}
+
+function toExpiredMailboxSample(mailbox: MailboxRecord) {
+  return {
+    address: mailbox.address,
+    environment_id: mailbox.environment_id,
+    expires_at: mailbox.expires_at,
+    mailbox_pool_id: mailbox.mailbox_pool_id,
+    project_id: mailbox.project_id,
+  };
+}
+
+function toRetentionScopeSummarySample(record: RetentionScopeSummaryRecord) {
+  return {
+    archived_email_count: record.archived_email_count,
+    environment_id: record.environment_id,
+    mailbox_pool_id: record.mailbox_pool_id,
+    project_id: record.project_id,
+    purged_active_email_count: record.purged_active_email_count,
+    purged_deleted_email_count: record.purged_deleted_email_count,
+  };
+}
+
+function buildRetentionExecutionDetail(input: {
+  archived_emails: RetentionAffectedEmailRecord[];
+  duration_ms: number;
+  expired_mailboxes: MailboxRecord[];
+  fallback_deleted_email_retention_hours: number;
+  fallback_email_retention_hours: number;
+  job_id?: number;
+  purged_active_emails: RetentionAffectedEmailRecord[];
+  purged_deleted_emails: RetentionAffectedEmailRecord[];
+  scope_summaries: RetentionScopeSummaryRecord[];
+  summary: {
+    affected_project_ids: number[];
+    applied_policy_count: number;
+    archived_email_count: number;
+    purged_active_email_count: number;
+    purged_deleted_email_count: number;
+    scanned_email_count: number;
+  };
+}) {
+  return {
+    affected_project_count: input.summary.affected_project_ids.length,
+    affected_project_ids: input.summary.affected_project_ids,
+    applied_policy_count: input.summary.applied_policy_count,
+    archived_email_count: input.summary.archived_email_count,
+    archived_email_samples: input.archived_emails.slice(0, MAX_RETENTION_DETAIL_EMAILS).map(toRetentionEmailSample),
+    archived_email_sample_truncated: input.archived_emails.length > MAX_RETENTION_DETAIL_EMAILS,
+    duration_ms: input.duration_ms,
+    expired_mailbox_count: input.expired_mailboxes.length,
+    expired_mailbox_samples: input.expired_mailboxes.slice(0, MAX_RETENTION_DETAIL_MAILBOXES).map(toExpiredMailboxSample),
+    expired_mailbox_sample_truncated: input.expired_mailboxes.length > MAX_RETENTION_DETAIL_MAILBOXES,
+    fallback_deleted_email_retention_hours: input.fallback_deleted_email_retention_hours,
+    fallback_email_retention_hours: input.fallback_email_retention_hours,
+    job_id: input.job_id || null,
+    purged_active_email_count: input.summary.purged_active_email_count,
+    purged_active_email_samples: input.purged_active_emails.slice(0, MAX_RETENTION_DETAIL_EMAILS).map(toRetentionEmailSample),
+    purged_active_email_sample_truncated: input.purged_active_emails.length > MAX_RETENTION_DETAIL_EMAILS,
+    purged_deleted_email_count: input.summary.purged_deleted_email_count,
+    purged_deleted_email_samples: input.purged_deleted_emails.slice(0, MAX_RETENTION_DETAIL_EMAILS).map(toRetentionEmailSample),
+    purged_deleted_email_sample_truncated: input.purged_deleted_emails.length > MAX_RETENTION_DETAIL_EMAILS,
+    scanned_email_count: input.summary.scanned_email_count,
+    scope_summaries: input.scope_summaries
+      .slice(0, MAX_RETENTION_DETAIL_SCOPES)
+      .map(toRetentionScopeSummarySample),
+    scope_summary_truncated: input.scope_summaries.length > MAX_RETENTION_DETAIL_SCOPES,
+  };
+}
+
+async function runRetentionMaintenance(
+  env: WorkerEnv,
+  triggerSource: "manual" | "scheduled",
+) {
+  const retentionStartedAt = Date.now();
+
+  try {
+    const retentionSummary = await applyRetentionPoliciesPurge(env.DB, {
+      deleted_email_retention_hours: PURGE_DELETED_EMAILS_AFTER_HOURS,
+      email_retention_hours: EXPIRED_EMAIL_RETENTION_HOURS,
+    });
+    const expiredMailboxes = await disableExpiredMailboxes(env.DB);
+    const retentionFinishedAt = Date.now();
+    const retentionDurationMs = retentionFinishedAt - retentionStartedAt;
+    const detailForRun = buildRetentionExecutionDetail({
+      archived_emails: retentionSummary.archived_emails,
+      duration_ms: retentionDurationMs,
+      expired_mailboxes: expiredMailboxes,
+      fallback_deleted_email_retention_hours: PURGE_DELETED_EMAILS_AFTER_HOURS,
+      fallback_email_retention_hours: EXPIRED_EMAIL_RETENTION_HOURS,
+      purged_active_emails: retentionSummary.purged_active_emails,
+      purged_deleted_emails: retentionSummary.purged_deleted_emails,
+      scope_summaries: retentionSummary.scope_summaries,
+      summary: retentionSummary,
+    });
+
+    const retentionJobId = await createRetentionJobRun(env.DB, {
+      archived_email_count: retentionSummary.archived_email_count,
+      applied_policy_count: retentionSummary.applied_policy_count,
+      detail_json: detailForRun,
+      duration_ms: retentionDurationMs,
+      error_message: "",
+      expired_mailbox_count: expiredMailboxes.length,
+      finished_at: retentionFinishedAt,
+      purged_active_email_count: retentionSummary.purged_active_email_count,
+      purged_deleted_email_count: retentionSummary.purged_deleted_email_count,
+      scanned_email_count: retentionSummary.scanned_email_count,
+      started_at: retentionStartedAt,
+      status: "success",
+      trigger_source: triggerSource,
+    });
+
+    const retentionDetail = buildRetentionExecutionDetail({
+      archived_emails: retentionSummary.archived_emails,
+      duration_ms: retentionDurationMs,
+      expired_mailboxes: expiredMailboxes,
+      fallback_deleted_email_retention_hours: PURGE_DELETED_EMAILS_AFTER_HOURS,
+      fallback_email_retention_hours: EXPIRED_EMAIL_RETENTION_HOURS,
+      job_id: retentionJobId,
+      purged_active_emails: retentionSummary.purged_active_emails,
+      purged_deleted_emails: retentionSummary.purged_deleted_emails,
+      scope_summaries: retentionSummary.scope_summaries,
+      summary: retentionSummary,
+    });
+
+    await addAuditLog(env.DB, {
+      action: "retention.run.completed",
+      actor: SCHEDULED_RETENTION_ACTOR,
+      detail: retentionDetail,
+      entity_id: retentionJobId > 0 ? String(retentionJobId) : String(retentionStartedAt),
+      entity_type: "retention_job",
+    });
+
+    const retentionSource = triggerSource === "manual" ? "manual_retention" : "scheduled_retention";
+    for (const email of retentionSummary.archived_emails) {
+      const projectIds = email.project_id ? [email.project_id] : [];
+      await sendEventNotifications(env.DB, "email.archived", {
+        actor: "system",
+        archive_reason: "retention_policy",
+        message_id: email.message_id,
+        project_id: email.project_id,
+        project_ids: projectIds,
+        source: retentionSource,
+      }, {
+        environment_id: email.environment_id,
+        mailbox_pool_id: email.mailbox_pool_id,
+        project_id: email.project_id,
+        project_ids: projectIds,
+      });
+    }
+
+    await sendEventNotifications(env.DB, "lifecycle.retention_completed", retentionDetail, {
+      project_ids: retentionSummary.affected_project_ids,
+    });
+
+    for (const mailbox of expiredMailboxes) {
+      await sendEventNotifications(env.DB, "mailbox.expired", {
+        address: mailbox.address,
+        expires_at: mailbox.expires_at,
+        project_id: mailbox.project_id,
+        project_name: mailbox.project_name,
+      }, {
+        environment_id: mailbox.environment_id,
+        mailbox_pool_id: mailbox.mailbox_pool_id,
+        project_id: mailbox.project_id,
+        project_ids: mailbox.project_id ? [mailbox.project_id] : [],
+      });
+    }
+
+    return {
+      detail: retentionDetail,
+      expired_mailboxes: expiredMailboxes,
+      job_id: retentionJobId,
+      summary: retentionSummary,
+    };
+  } catch (retentionError) {
+    const retentionFinishedAt = Date.now();
+    const retentionDurationMs = retentionFinishedAt - retentionStartedAt;
+    const retentionDetail = {
+      duration_ms: retentionDurationMs,
+      fallback_deleted_email_retention_hours: PURGE_DELETED_EMAILS_AFTER_HOURS,
+      fallback_email_retention_hours: EXPIRED_EMAIL_RETENTION_HOURS,
+    };
+    const errorMessage = retentionError instanceof Error ? retentionError.message : String(retentionError || "");
+    const retentionJobId = await createRetentionJobRun(env.DB, {
+      archived_email_count: 0,
+      applied_policy_count: 0,
+      detail_json: retentionDetail,
+      duration_ms: retentionDurationMs,
+      error_message: errorMessage,
+      expired_mailbox_count: 0,
+      finished_at: retentionFinishedAt,
+      purged_active_email_count: 0,
+      purged_deleted_email_count: 0,
+      scanned_email_count: 0,
+      started_at: retentionStartedAt,
+      status: "failed",
+      trigger_source: triggerSource,
+    });
+    await addAuditLog(env.DB, {
+      action: "retention.run.failed",
+      actor: SCHEDULED_RETENTION_ACTOR,
+      detail: {
+        ...retentionDetail,
+        error_message: errorMessage,
+      },
+      entity_id: retentionJobId > 0 ? String(retentionJobId) : String(retentionStartedAt),
+      entity_type: "retention_job",
+    });
+    await sendEventNotifications(env.DB, "lifecycle.retention_failed", {
+      ...retentionDetail,
+      error_message: errorMessage,
+      job_id: retentionJobId || null,
+    });
+    throw retentionError;
+  }
+}
 
 function apiOptionsResponse(request: Request, env: WorkerEnv): Response {
   const cors = getCorsHeaders(request, env.ALLOWED_API_ORIGINS);
@@ -313,14 +553,55 @@ export default {
         if (pathname === "/admin/domain-assets/status" && method === "GET") {
           return handlers.handleAdminDomainAssetsStatusGet(env.DB, env, actor);
         }
+        if (pathname === "/admin/domain-providers" && method === "GET") {
+          return handlers.handleAdminDomainProvidersGet();
+        }
         if (pathname === "/admin/domain-assets" && method === "POST") return handlers.handleAdminDomainAssetsPost(request, env.DB, actor);
         if (/^\/admin\/domain-assets\/\d+\/sync-catch-all$/.test(pathname) && method === "POST") {
           return handlers.handleAdminDomainAssetsSyncCatchAll(pathname, env.DB, env, actor);
         }
         if (pathname.startsWith("/admin/domain-assets/") && method === "PUT") return handlers.handleAdminDomainAssetsPut(pathname, request, env.DB, actor);
         if (pathname.startsWith("/admin/domain-assets/") && method === "DELETE") return handlers.handleAdminDomainAssetsDelete(pathname, env.DB, actor);
+        if (pathname === "/admin/domain-routing-profiles" && method === "GET") {
+          return handlers.handleAdminDomainRoutingProfilesGet(url, env.DB, actor);
+        }
+        if (pathname === "/admin/domain-routing-profiles" && method === "POST") {
+          return handlers.handleAdminDomainRoutingProfilesPost(request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/domain-routing-profiles/") && method === "PUT") {
+          return handlers.handleAdminDomainRoutingProfilesPut(pathname, request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/domain-routing-profiles/") && method === "DELETE") {
+          return handlers.handleAdminDomainRoutingProfilesDelete(pathname, env.DB, actor);
+        }
         if (pathname === "/admin/workspace/catalog" && method === "GET") {
           return handlers.handleAdminWorkspaceCatalog(url, env.DB, actor);
+        }
+        if (pathname === "/admin/retention-policies" && method === "GET") {
+          return handlers.handleAdminRetentionPoliciesGet(url, env.DB, actor);
+        }
+        if (pathname === "/admin/retention-jobs" && method === "GET") {
+          return handlers.handleAdminRetentionJobRunsGet(url, env.DB, actor);
+        }
+        if (pathname === "/admin/retention-jobs/run" && method === "POST") {
+          if (actor.access_scope === "bound") {
+            return jsonError("project-scoped admin cannot access global observability", 403);
+          }
+          const result = await runRetentionMaintenance(env, "manual");
+          return json({
+            detail: result.detail,
+            job_id: result.job_id,
+            ok: true,
+          });
+        }
+        if (pathname === "/admin/retention-policies" && method === "POST") {
+          return handlers.handleAdminRetentionPoliciesPost(request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/retention-policies/") && method === "PUT") {
+          return handlers.handleAdminRetentionPoliciesPut(pathname, request, env.DB, actor);
+        }
+        if (pathname.startsWith("/admin/retention-policies/") && method === "DELETE") {
+          return handlers.handleAdminRetentionPoliciesDelete(pathname, env.DB, actor);
         }
         if (pathname === "/admin/projects" && method === "POST") {
           return handlers.handleAdminProjectsPost(request, env.DB, actor);
@@ -350,8 +631,8 @@ export default {
           return handlers.handleAdminMailboxPoolsDelete(pathname, env.DB, actor);
         }
         if (pathname === "/admin/stats/overview" && method === "GET") return handlers.handleAdminOverviewStats(env.DB, actor);
-        if (pathname === "/admin/audit" && method === "GET") return handlers.handleAdminAuditLogs(url, env.DB);
-        if (pathname === "/admin/errors" && method === "GET") return handlers.handleAdminErrors(url, env.DB);
+        if (pathname === "/admin/audit" && method === "GET") return handlers.handleAdminAuditLogs(url, env.DB, actor);
+        if (pathname === "/admin/errors" && method === "GET") return handlers.handleAdminErrors(url, env.DB, actor);
 
         if (pathname === "/admin/emails" && method === "GET") return handlers.handleAdminEmails(url, env.DB, actor);
         if (/^\/admin\/emails\/[^/]+\/metadata$/.test(pathname) && method === "PUT") {
@@ -359,6 +640,12 @@ export default {
         }
         if (/^\/admin\/emails\/[^/]+\/restore$/.test(pathname) && method === "POST") {
           return handlers.handleAdminEmailRestore(pathname, env.DB, actor);
+        }
+        if (/^\/admin\/emails\/[^/]+\/archive$/.test(pathname) && method === "POST") {
+          return handlers.handleAdminEmailArchive(pathname, env.DB, actor);
+        }
+        if (/^\/admin\/emails\/[^/]+\/unarchive$/.test(pathname) && method === "POST") {
+          return handlers.handleAdminEmailUnarchive(pathname, env.DB, actor);
         }
         if (/^\/admin\/emails\/[^/]+\/purge$/.test(pathname) && method === "DELETE") {
           return handlers.handleAdminEmailPurge(pathname, env.DB, actor);
@@ -394,7 +681,7 @@ export default {
         if (pathname.startsWith("/admin/mailboxes/") && method === "PUT") return handlers.handleAdminMailboxesPut(pathname, request, env.DB, env, actor);
         if (pathname.startsWith("/admin/mailboxes/") && method === "DELETE") return handlers.handleAdminMailboxesDelete(pathname, env.DB, env, actor);
 
-        if (pathname === "/admin/admins" && method === "GET") return handlers.handleAdminAdminsGet(url, env.DB);
+        if (pathname === "/admin/admins" && method === "GET") return handlers.handleAdminAdminsGet(url, env.DB, actor);
         if (pathname === "/admin/admins" && method === "POST") return handlers.handleAdminAdminsPost(request, env.DB, actor);
         if (pathname.startsWith("/admin/admins/") && method === "PUT") return handlers.handleAdminAdminsPut(pathname, request, env.DB, actor);
 
@@ -402,9 +689,21 @@ export default {
         if (/^\/admin\/notifications\/\d+\/deliveries$/.test(pathname) && method === "GET") {
           return handlers.handleAdminNotificationDeliveriesGet(pathname, url, env.DB, actor);
         }
+        if (/^\/admin\/notifications\/deliveries\/\d+\/attempts$/.test(pathname) && method === "GET") {
+          return handlers.handleAdminNotificationDeliveryAttemptsGet(pathname, url, env.DB, actor);
+        }
         if (pathname === "/admin/notifications" && method === "POST") return handlers.handleAdminNotificationsPost(request, env.DB, actor);
+        if (pathname === "/admin/notifications/deliveries/bulk-retry" && method === "POST") {
+          return handlers.handleAdminNotificationDeliveryBulkRetry(request, env.DB, actor);
+        }
+        if (pathname === "/admin/notifications/deliveries/bulk-resolve" && method === "POST") {
+          return handlers.handleAdminNotificationDeliveryBulkResolve(request, env.DB, actor);
+        }
         if (/^\/admin\/notifications\/deliveries\/\d+\/retry$/.test(pathname) && method === "POST") {
           return handlers.handleAdminNotificationDeliveryRetry(pathname, env.DB, actor);
+        }
+        if (/^\/admin\/notifications\/deliveries\/\d+\/resolve$/.test(pathname) && method === "POST") {
+          return handlers.handleAdminNotificationDeliveryResolve(pathname, env.DB, actor);
         }
         if (/^\/admin\/notifications\/\d+\/test$/.test(pathname) && method === "POST") {
           return handlers.handleAdminNotificationsTest(pathname, env.DB, actor);
@@ -528,22 +827,7 @@ export default {
             });
           }
 
-          await clearExpiredEmails(env.DB, EXPIRED_EMAIL_RETENTION_HOURS);
-          await purgeDeletedEmails(env.DB, PURGE_DELETED_EMAILS_AFTER_HOURS);
-          const expiredMailboxes = await disableExpiredMailboxes(env.DB);
-          for (const mailbox of expiredMailboxes) {
-            await sendEventNotifications(env.DB, "mailbox.expired", {
-              address: mailbox.address,
-              expires_at: mailbox.expires_at,
-              project_id: mailbox.project_id,
-              project_name: mailbox.project_name,
-            }, {
-              environment_id: mailbox.environment_id,
-              mailbox_pool_id: mailbox.mailbox_pool_id,
-              project_id: mailbox.project_id,
-              project_ids: mailbox.project_id ? [mailbox.project_id] : [],
-            });
-          }
+          await runRetentionMaintenance(env, "scheduled");
         } catch (error) {
           await captureError(env.DB, "scheduled", error, {}, env.ERROR_WEBHOOK_URL);
         }
@@ -553,7 +837,14 @@ export default {
 };
 
 function resolveAdminPermission(pathname: string, method: string): AdminPermission | null {
-  if (pathname.startsWith("/admin/workspace") || pathname.startsWith("/admin/projects") || pathname.startsWith("/admin/environments") || pathname.startsWith("/admin/mailbox-pools")) {
+  if (
+    pathname.startsWith("/admin/workspace")
+    || pathname.startsWith("/admin/projects")
+    || pathname.startsWith("/admin/environments")
+    || pathname.startsWith("/admin/mailbox-pools")
+    || pathname.startsWith("/admin/retention-policies")
+    || pathname.startsWith("/admin/retention-jobs")
+  ) {
     return method === "GET" ? "workspace:read" : "workspace:write";
   }
   if (pathname.startsWith("/admin/admins")) return method === "GET" ? "admins:read" : "admins:write";
@@ -564,10 +855,13 @@ function resolveAdminPermission(pathname: string, method: string): AdminPermissi
   if (pathname.startsWith("/admin/rules")) return method === "GET" ? "rules:read" : "rules:write";
   if (pathname.startsWith("/admin/whitelist")) return method === "GET" ? "whitelist:read" : "whitelist:write";
   if (pathname.startsWith("/admin/mailboxes")) return method === "GET" ? "mailboxes:read" : "mailboxes:write";
+  if (pathname.startsWith("/admin/domain-providers")) return "mailboxes:read";
   if (pathname.startsWith("/admin/domain-assets")) return method === "GET" ? "mailboxes:read" : "mailboxes:write";
+  if (pathname.startsWith("/admin/domain-routing-profiles")) return method === "GET" ? "mailboxes:read" : "mailboxes:write";
   if (pathname.startsWith("/admin/emails")) {
     if (method === "GET") return "emails:read";
     if (pathname.endsWith("/metadata")) return "emails:write";
+    if (pathname.endsWith("/archive") || pathname.endsWith("/unarchive")) return "emails:write";
     if (pathname.endsWith("/restore")) return "emails:restore";
     return "emails:delete";
   }
@@ -585,5 +879,10 @@ function normalizeConstraintMessage(error: unknown): string {
   if (/projects\.slug/i.test(message)) return "project slug already exists";
   if (/idx_environments_project_slug|environments/i.test(message)) return "environment slug already exists in the selected project";
   if (/idx_mailbox_pools_environment_slug|mailbox_pools/i.test(message)) return "mailbox pool slug already exists in the selected environment";
+  if (/domain_routing_profiles\.slug|routing_profile/i.test(message)) return "routing profile slug already exists";
+  if (/retention_policies\.scope_key|idx_retention_policies_scope_key|scope_key/i.test(message)) {
+    return "a retention policy already exists for the selected scope";
+  }
+  if (/domains\.domain|domains/i.test(message)) return "domain already exists";
   return "database constraint failed";
 }

@@ -36,11 +36,17 @@ export interface WorkerExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
 }
 
-export type AdminRole = "owner" | "admin" | "analyst";
+export type AdminRole =
+  | "owner"
+  | "platform_admin"
+  | "project_admin"
+  | "operator"
+  | "viewer";
 export type AccessScope = "all" | "bound";
 export type AuthKind = "bootstrap_token" | "admin_user";
 export type ApiTokenPermission = "read:attachment" | "read:code" | "read:mail" | "read:rule-result";
 export type CatchAllMode = "inherit" | "enabled" | "disabled";
+export type DomainCatchAllSource = "domain" | "inherit" | "routing_profile";
 
 export interface AuthSession {
   access_scope?: AccessScope;
@@ -200,6 +206,9 @@ export interface WorkspaceCatalog {
 }
 
 export interface EmailSummary extends WorkspaceScope {
+  archive_reason: string;
+  archived_at: number | null;
+  archived_by: string;
   deleted_at: number | null;
   extraction: EmailExtractionResult;
   from_address: string;
@@ -259,7 +268,55 @@ export interface MailboxRecord extends WorkspaceScope {
   updated_at: number;
 }
 
+export type RetentionPolicyScopeLevel = "global" | "project" | "environment" | "mailbox_pool";
+
+export interface RetentionPolicyRecord extends WorkspaceScope {
+  archive_email_hours: number | null;
+  created_at: number;
+  deleted_email_retention_hours: number | null;
+  description: string;
+  email_retention_hours: number | null;
+  id: number;
+  is_enabled: boolean;
+  mailbox_ttl_hours: number | null;
+  name: string;
+  scope_key: string;
+  scope_level: RetentionPolicyScopeLevel;
+  updated_at: number;
+}
+
+export interface ResolvedRetentionPolicy {
+  archive_email_hours: number | null;
+  archive_email_source: RetentionPolicyScopeLevel | "default" | null;
+  deleted_email_retention_hours: number | null;
+  deleted_email_retention_source: RetentionPolicyScopeLevel | "default" | null;
+  email_retention_hours: number | null;
+  email_retention_source: RetentionPolicyScopeLevel | "default" | null;
+  mailbox_ttl_hours: number | null;
+  mailbox_ttl_source: RetentionPolicyScopeLevel | "default" | null;
+}
+
+export interface RetentionJobRunRecord {
+  archived_email_count: number;
+  applied_policy_count: number;
+  created_at: number;
+  detail_json: JsonValue;
+  duration_ms: number | null;
+  error_message: string;
+  expired_mailbox_count: number;
+  finished_at: number | null;
+  id: number;
+  purged_active_email_count: number;
+  purged_deleted_email_count: number;
+  scanned_email_count: number;
+  started_at: number;
+  status: "failed" | "success";
+  trigger_source: string;
+}
+
 export interface DomainAssetRecord {
+  allow_mailbox_route_sync: boolean;
+  allow_new_mailboxes: boolean;
   catch_all_forward_to: string;
   catch_all_mode: CatchAllMode;
   created_at: number;
@@ -276,23 +333,54 @@ export interface DomainAssetRecord {
   project_id: number | null;
   project_name: string;
   project_slug: string;
+  routing_profile_catch_all_forward_to: string;
+  routing_profile_catch_all_mode: CatchAllMode;
+  routing_profile_enabled: boolean;
+  routing_profile_id: number | null;
+  routing_profile_name: string;
+  routing_profile_slug: string;
   updated_at: number;
   zone_id: string;
 }
 
 export interface DomainAssetStatusRecord {
   active_mailbox_total: number;
+  allow_mailbox_route_sync: boolean;
+  allow_new_mailboxes: boolean;
   catch_all_drift: boolean;
   catch_all_enabled: boolean;
   catch_all_forward_to: string;
   catch_all_forward_to_actual: string;
   catch_all_mode: CatchAllMode;
+  catch_all_source: DomainCatchAllSource;
   cloudflare_configured: boolean;
   cloudflare_error: string;
   cloudflare_routes_total: number;
   domain: string;
   email_total: number;
   observed_mailbox_total: number;
+  provider: string;
+  routing_profile_name: string;
+}
+
+export interface DomainRoutingProfileRecord {
+  catch_all_forward_to: string;
+  catch_all_mode: CatchAllMode;
+  created_at: number;
+  environment_id: number | null;
+  environment_name: string;
+  environment_slug: string;
+  id: number;
+  is_enabled: boolean;
+  linked_domain_count: number;
+  name: string;
+  note: string;
+  project_id: number | null;
+  project_name: string;
+  project_slug: string;
+  provider: string;
+  slug: string;
+  updated_at: number;
 }
 
 export interface MailboxSyncResult {
@@ -324,14 +412,30 @@ export interface AdminUserRecord {
   id: string;
   is_enabled: boolean;
   last_login_at: number | null;
+  last_modified_action: string;
+  last_modified_at: number | null;
+  last_modified_by: string;
+  note: string;
   projects: ProjectBindingRecord[];
   role: AdminRole;
   updated_at: number;
   username: string;
 }
 
+export interface NotificationAlertConfig {
+  dead_letter_critical_threshold: number;
+  dead_letter_warning_threshold: number;
+  inactivity_hours: number;
+  min_attempts_24h: number;
+  retrying_critical_threshold: number;
+  retrying_warning_threshold: number;
+  success_rate_critical_threshold: number;
+  success_rate_warning_threshold: number;
+}
+
 export interface NotificationEndpointRecord {
   access_scope: AccessScope;
+  alert_config: NotificationAlertConfig;
   created_at: number;
   events: string[];
   id: number;
@@ -359,8 +463,10 @@ export interface NotificationDeliveryScope {
 export interface NotificationDeliveryRecord {
   attempt_count: number;
   created_at: number;
+  dead_letter_reason: string;
   event: string;
   id: number;
+  is_dead_letter: boolean;
   last_attempt_at: number | null;
   last_error: string;
   max_attempts: number;
@@ -368,9 +474,75 @@ export interface NotificationDeliveryRecord {
   notification_endpoint_id: number;
   payload: JsonValue;
   response_status: number | null;
+  resolved_at: number | null;
+  resolved_by: string;
   scope: NotificationDeliveryScope;
   status: NotificationDeliveryStatus;
   updated_at: number;
+}
+
+export interface NotificationDeliveryAttemptRecord {
+  attempt_number: number;
+  attempted_at: number;
+  created_at: number;
+  duration_ms: number | null;
+  error_message: string;
+  id: number;
+  next_retry_at: number | null;
+  notification_delivery_id: number;
+  notification_endpoint_id: number;
+  response_status: number | null;
+  status: NotificationDeliveryStatus;
+  updated_at: number;
+}
+
+export interface NotificationSummaryAlert {
+  code:
+    | "dead_letter_backlog"
+    | "inactive_24h"
+    | "low_success_rate_24h"
+    | "retry_queue_active";
+  description: string;
+  severity: "critical" | "info" | "warning";
+  title: string;
+}
+
+export interface NotificationDeliverySummary {
+  alerts: NotificationSummaryAlert[];
+  avg_duration_ms_24h: number | null;
+  dead_letter_total: number;
+  failed_total: number;
+  health_status: "critical" | "healthy" | "idle" | "warning";
+  last_attempt_at: number | null;
+  last_failure_at: number | null;
+  last_success_at: number | null;
+  pending_total: number;
+  recent_attempts_24h: number;
+  recent_failed_attempts_24h: number;
+  recent_success_attempts_24h: number;
+  resolved_dead_letter_total: number;
+  retrying_total: number;
+  success_total: number;
+  success_rate_24h: number;
+  total_attempts: number;
+  total_deliveries: number;
+}
+
+export interface NotificationDeliveriesPayload extends PaginationPayload<NotificationDeliveryRecord> {
+  summary: NotificationDeliverySummary;
+}
+
+export interface NotificationDeliveryBulkActionError {
+  delivery_id: number;
+  message: string;
+}
+
+export interface NotificationDeliveryBulkActionResult {
+  errors: NotificationDeliveryBulkActionError[];
+  failed_count: number;
+  requested_count: number;
+  status_breakdown?: Partial<Record<NotificationDeliveryStatus, number>>;
+  success_count: number;
 }
 
 export interface ApiTokenRecord {
@@ -436,6 +608,7 @@ export interface ErrorEventsPayload extends PaginationPayload<ErrorEventRecord> 
 
 export interface EmailSearchFilters {
   address?: string | null;
+  archived?: "exclude" | "include" | "only";
   date_from?: number | null;
   date_to?: number | null;
   deleted?: "exclude" | "include" | "only";

@@ -1,4 +1,9 @@
-import { ROLE_PERMISSIONS, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from "../utils/constants";
+import {
+  hasAdminPermission,
+  normalizeAdminRole,
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_SECONDS,
+} from "../utils/constants";
 import { decodeBase64Url, encodeBase64Url } from "../utils/utils";
 import type { AdminPermission } from "../utils/constants";
 import type { AdminRole, AuthSession } from "../server/types";
@@ -120,7 +125,7 @@ export function clearAdminSessionCookie(request: Request): string {
 }
 
 export function hasPermission(role: AdminRole, permission: AdminPermission): boolean {
-  return ROLE_PERMISSIONS[role].includes(permission);
+  return hasAdminPermission(role, permission);
 }
 
 export async function hashPassword(password: string, saltBase64Url?: string) {
@@ -213,7 +218,7 @@ async function verifySessionToken(
           .map(item => Number(item))
           .filter(item => Number.isFinite(item) && item > 0)
         : [],
-      role: parsed.role,
+      role: normalizeAdminRole(parsed.role, parsed.access_scope || "all") || "viewer",
       user_agent_hash: parsed.user_agent_hash,
       user_id: parsed.user_id,
       username: parsed.username,

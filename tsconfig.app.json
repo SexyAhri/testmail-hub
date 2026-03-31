@@ -19,5 +19,5 @@
     "types": ["vite/client"],
     "jsx": "react-jsx"
   },
-  "include": ["src/client", "src/server/types.ts"]
+  "include": ["src/client", "src/server/types.ts", "src/shared/**/*.ts", "src/utils/constants.ts"]
 }

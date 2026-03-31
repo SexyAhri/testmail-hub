@@ -35,7 +35,7 @@ export default function TrashPage({ onUnauthorized }: TrashPageProps) {
   async function loadData(nextPage: number) {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ deleted: "only", page: String(nextPage) });
+      const params = new URLSearchParams({ archived: "include", deleted: "only", page: String(nextPage) });
       const payload = await getEmails(params);
       setItems(payload.items);
       setTotal(payload.total);

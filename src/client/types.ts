@@ -1,12 +1,15 @@
 import type {
   AccessScope,
   AdminRole,
+  NotificationAlertConfig,
   ApiTokenPermission,
   ApiTokenRecord,
   AdminUserRecord,
   AuditLogRecord,
   CatchAllMode,
+  DomainCatchAllSource,
   DomainAssetRecord,
+  DomainRoutingProfileRecord,
   DomainAssetStatusRecord,
   EmailAttachmentRecord,
   EmailDetail,
@@ -20,6 +23,10 @@ import type {
   MailboxRecord,
   MailboxSyncResult,
   NotificationDeliveryRecord,
+  NotificationDeliveryAttemptRecord,
+  NotificationDeliveriesPayload,
+  NotificationDeliveryBulkActionResult,
+  NotificationDeliverySummary,
   NotificationEndpointRecord,
   OutboundContactRecord,
   OutboundEmailAttachmentRecord,
@@ -30,6 +37,10 @@ import type {
   OverviewStats,
   PaginationPayload,
   ProjectBindingRecord,
+  RetentionJobRunRecord,
+  ResolvedRetentionPolicy,
+  RetentionPolicyRecord,
+  RetentionPolicyScopeLevel,
   RuleMatch,
   RuleRecord,
   MailboxPoolRecord,
@@ -43,12 +54,15 @@ import type {
 export type {
   AccessScope,
   AdminRole,
+  NotificationAlertConfig,
   ApiTokenPermission,
   ApiTokenRecord,
   AdminUserRecord,
   AuditLogRecord,
   CatchAllMode,
+  DomainCatchAllSource,
   DomainAssetRecord,
+  DomainRoutingProfileRecord,
   DomainAssetStatusRecord,
   EmailAttachmentRecord,
   EmailDetail,
@@ -62,6 +76,10 @@ export type {
   MailboxRecord,
   MailboxSyncResult,
   NotificationDeliveryRecord,
+  NotificationDeliveryAttemptRecord,
+  NotificationDeliveriesPayload,
+  NotificationDeliveryBulkActionResult,
+  NotificationDeliverySummary,
   NotificationEndpointRecord,
   OutboundContactRecord,
   OutboundEmailAttachmentRecord,
@@ -72,6 +90,10 @@ export type {
   OverviewStats,
   PaginationPayload,
   ProjectBindingRecord,
+  RetentionJobRunRecord,
+  ResolvedRetentionPolicy,
+  RetentionPolicyRecord,
+  RetentionPolicyScopeLevel,
   RuleMatch,
   RuleRecord,
   MailboxPoolRecord,
@@ -107,6 +129,8 @@ export interface DomainsPayload {
 }
 
 export interface DomainMutationPayload {
+  allow_mailbox_route_sync: boolean;
+  allow_new_mailboxes: boolean;
   catch_all_forward_to: string;
   catch_all_mode: CatchAllMode;
   domain: string;
@@ -117,7 +141,20 @@ export interface DomainMutationPayload {
   note: string;
   provider: string;
   project_id?: number | null;
+  routing_profile_id?: number | null;
   zone_id: string;
+}
+
+export interface DomainRoutingProfileMutationPayload {
+  catch_all_forward_to: string;
+  catch_all_mode: CatchAllMode;
+  environment_id?: number | null;
+  is_enabled: boolean;
+  name: string;
+  note: string;
+  project_id?: number | null;
+  provider: string;
+  slug?: string;
 }
 
 export interface LoginPayload {
@@ -164,6 +201,19 @@ export interface MailboxPoolPayload {
   slug?: string;
 }
 
+export interface RetentionPolicyPayload {
+  archive_email_hours?: number | null;
+  deleted_email_retention_hours?: number | null;
+  description: string;
+  email_retention_hours?: number | null;
+  environment_id?: number | null;
+  is_enabled: boolean;
+  mailbox_pool_id?: number | null;
+  mailbox_ttl_hours?: number | null;
+  name: string;
+  project_id?: number | null;
+}
+
 export interface RuleMutationPayload {
   is_enabled: boolean;
   pattern: string;
@@ -184,6 +234,7 @@ export interface EmailMetadataPayload {
 
 export interface NotificationMutationPayload {
   access_scope: AccessScope;
+  alert_config: NotificationAlertConfig;
   events: string[];
   is_enabled: boolean;
   name: string;
@@ -197,10 +248,27 @@ export interface AdminMutationPayload {
   access_scope: AccessScope;
   display_name: string;
   is_enabled: boolean;
+  note: string;
   password?: string;
   project_ids?: number[] | string;
   role: AdminRole;
   username?: string;
+}
+
+export interface AdminListFilters {
+  access_scope?: AccessScope | null;
+  is_enabled?: boolean | null;
+  keyword?: string;
+  project_id?: number | null;
+  role?: AdminRole | null;
+}
+
+export interface AuditLogListFilters {
+  action?: string | null;
+  action_prefix?: string | null;
+  entity_id?: string | null;
+  entity_type?: string | null;
+  keyword?: string;
 }
 
 export interface ApiTokenMutationPayload {
@@ -225,6 +293,7 @@ export interface RuleTestResult {
 
 export interface EmailSearchPayload {
   address?: string;
+  archived?: "exclude" | "include" | "only";
   date_from?: number;
   date_to?: number;
   deleted?: "exclude" | "include" | "only";

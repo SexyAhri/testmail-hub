@@ -10,6 +10,7 @@ import {
   SnippetsOutlined,
 } from "@ant-design/icons";
 import {
+  Alert,
   App,
   Button,
   Col,
@@ -66,6 +67,13 @@ import {
 } from "../components";
 import type { MetricChartDatum } from "../components";
 import { useTableSelection } from "../hooks/useTableSelection";
+import {
+  canManageGlobalSettings,
+  canWriteAnyResource,
+  isProjectScopedUser,
+  isReadOnlyUser,
+  type CurrentUser,
+} from "../permissions";
 import type {
   OutboundContactPayload,
   OutboundContactRecord,
@@ -116,6 +124,7 @@ const INITIAL_STATS: OutboundStats = {
 };
 
 interface OutboundEmailsPageProps {
+  currentUser?: CurrentUser;
   onUnauthorized: () => void;
 }
 
@@ -270,7 +279,7 @@ function normalizeAttachment(record: OutboundEmailRecord): OutboundEmailAttachme
   }));
 }
 
-export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPageProps) {
+export default function OutboundEmailsPage({ currentUser, onUnauthorized }: OutboundEmailsPageProps) {
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const [composeForm] = Form.useForm<ComposeFormValues>();
@@ -332,6 +341,10 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
   const activeStatuses = activeTab === "records" ? recordStatuses : draftStatuses;
   const activeStatusKey = activeStatuses.join(",");
   const composeSchedule = Form.useWatch("scheduled_at", composeForm);
+  const canWriteOutbound = canWriteAnyResource(currentUser);
+  const canManageOutboundSettings = canManageGlobalSettings(currentUser);
+  const isReadOnly = isReadOnlyUser(currentUser);
+  const isProjectScoped = isProjectScopedUser(currentUser);
 
   const contactOptions = useMemo(
     () =>
@@ -341,6 +354,9 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
       })),
     [contacts],
   );
+  const emailTableRowSelection = canWriteOutbound ? emailRowSelection : undefined;
+  const templateTableRowSelection = canWriteOutbound ? templateRowSelection : undefined;
+  const contactTableRowSelection = canWriteOutbound ? contactRowSelection : undefined;
 
   const statsSentSeries = useMemo(() => buildTrendSeries(stats.recent_daily, "sent"), [stats.recent_daily]);
   const statsFailedSeries = useMemo(() => buildTrendSeries(stats.recent_daily, "failed"), [stats.recent_daily]);
@@ -846,14 +862,18 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
       render: (_value, record) => (
         <ActionButtons
           onView={() => void openEmailDetail(record)}
-          onEdit={record.status === "sent" || record.status === "sending" ? undefined : () => void openEditEmail(record)}
-          onDelete={() => void handleDeleteEmail(record)}
+          onEdit={
+            canWriteOutbound && record.status !== "sent" && record.status !== "sending"
+              ? () => void openEditEmail(record)
+              : undefined
+          }
+          onDelete={canWriteOutbound ? () => void handleDeleteEmail(record) : undefined}
           extra={(
-            record.status === "sent" || record.status === "sending" ? null : (
+            canWriteOutbound && record.status !== "sent" && record.status !== "sending" ? (
               <Button type="link" size="small" onClick={() => void handleSendStored(record)}>
                 立即发
               </Button>
-            )
+            ) : null
           )}
         />
       ),
@@ -887,25 +907,29 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
       key: "action",
       width: 220,
       render: (_value, record) => (
-        <ActionButtons
-          onEdit={() => openTemplateDrawer(record)}
-          onDelete={() => void handleDeleteTemplate(record)}
-          extra={(
-            <Button
-              type="link"
-              size="small"
-              onClick={() => openCompose({
-                html_body: renderTemplateString(record.html_template, {}),
-                subject: renderTemplateString(record.subject_template, {}),
-                template_id: record.id,
-                template_variables: buildVariableSkeleton(record),
-                text_body: renderTemplateString(record.text_template, {}),
-              })}
-            >
-              写邮件
-            </Button>
-          )}
-        />
+        canWriteOutbound ? (
+          <ActionButtons
+            onEdit={() => openTemplateDrawer(record)}
+            onDelete={() => void handleDeleteTemplate(record)}
+            extra={(
+              <Button
+                type="link"
+                size="small"
+                onClick={() => openCompose({
+                  html_body: renderTemplateString(record.html_template, {}),
+                  subject: renderTemplateString(record.subject_template, {}),
+                  template_id: record.id,
+                  template_variables: buildVariableSkeleton(record),
+                  text_body: renderTemplateString(record.text_template, {}),
+                })}
+              >
+                写邮件
+              </Button>
+            )}
+          />
+        ) : (
+          <span style={{ color: "#999" }}>只读</span>
+        )
       ),
     },
   ];
@@ -942,15 +966,19 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
       key: "action",
       width: 220,
       render: (_value, record) => (
-        <ActionButtons
-          onEdit={() => openContactDrawer(record)}
-          onDelete={() => void handleDeleteContact(record)}
-          extra={(
-            <Button type="link" size="small" onClick={() => openCompose({ to: [record.email] })}>
-              快速发信
-            </Button>
-          )}
-        />
+        canWriteOutbound ? (
+          <ActionButtons
+            onEdit={() => openContactDrawer(record)}
+            onDelete={() => void handleDeleteContact(record)}
+            extra={(
+              <Button type="link" size="small" onClick={() => openCompose({ to: [record.email] })}>
+                快速发信
+              </Button>
+            )}
+          />
+        ) : (
+          <span style={{ color: "#999" }}>只读</span>
+        )
       ),
     },
   ];
@@ -1009,7 +1037,7 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
                 <Button icon={<ReloadOutlined />} onClick={() => void Promise.all([loadBaseData(), loadEmails()])}>
                   刷新
                 </Button>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => openCompose()}>
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => openCompose()} disabled={!canWriteOutbound}>
                   新建邮件
                 </Button>
               </Space>
@@ -1020,7 +1048,7 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
 
       <DataTable
         cardTitle={activeTab === "drafts" ? "草稿与计划发送" : "发送记录"}
-        cardToolbar={(
+        cardToolbar={canWriteOutbound ? (
           <BatchActionsBar selectedCount={selectedEmails.length} onClear={clearSelectedEmails}>
             {selectedEmails.some(item => item.status !== "sent" && item.status !== "sending") ? (
               <Button onClick={() => void handleBatchSendEmails()}>
@@ -1036,11 +1064,11 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
               </Button>
             </Popconfirm>
           </BatchActionsBar>
-        )}
+        ) : undefined}
         columns={emailColumns}
         dataSource={emails}
         loading={loadingList}
-        rowSelection={emailRowSelection}
+        rowSelection={emailTableRowSelection}
         rowKey="id"
         current={page}
         total={emailTotal}
@@ -1057,23 +1085,47 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
         subtitle="统一管理外发邮件、草稿、计划任务、模板、联系人与发送统计"
         extra={(
           <Space wrap>
-            <Button icon={<SettingOutlined />} onClick={openSettingsDrawer}>
-              发件设置
-            </Button>
+            {!isReadOnly ? (
+              <Button icon={<SettingOutlined />} disabled={!canManageOutboundSettings} onClick={openSettingsDrawer}>
+                发件设置
+              </Button>
+            ) : null}
             <Button icon={<ReloadOutlined />} loading={loadingBase} onClick={() => void Promise.all([loadBaseData(), loadEmails()])}>
               刷新
             </Button>
-            <Button type="primary" icon={<SendOutlined />} onClick={() => openCompose()}>
-              立即写信
-            </Button>
+            {canWriteOutbound ? (
+              <Button type="primary" icon={<SendOutlined />} onClick={() => openCompose()}>
+                立即写信
+              </Button>
+            ) : null}
           </Space>
         )}
         tags={[
           { color: settings.api_key_configured ? "success" : "error", label: settings.api_key_configured ? "Resend 已连接" : "Resend 未配置" },
           { color: settings.allow_external_recipients ? "processing" : "default", label: settings.allow_external_recipients ? "允许外部收件人" : "仅域内发信" },
           { color: "blue", label: settings.from_domain || "未配置发信域名" },
+          ...(isReadOnly ? [{ color: "gold", label: "只读视角" }] : []),
+          ...(!isReadOnly && isProjectScoped ? [{ color: "gold", label: "项目级视角" }] : []),
         ]}
       />
+
+      {isReadOnly ? (
+        <Alert
+          showIcon
+          type="info"
+          message="当前账号为发信只读视角"
+          description="你可以查看发送记录、模板、联系人和统计数据，但发信、编辑、删除和批量操作入口已关闭。"
+          style={{ marginBottom: 16 }}
+        />
+      ) : isProjectScoped ? (
+        <Alert
+          showIcon
+          type="info"
+          message="当前账号为项目级发信视角"
+          description="你可以继续发信和管理模板/联系人，但“发件设置”属于全局配置，当前只提供查看，不支持修改。"
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       <MetricGrid>
         <MetricCard title="已发送" value={stats.total_sent} icon={<MailOutlined />} percent={Math.min(100, stats.total_sent)} color="#1677ff" />
@@ -1114,8 +1166,8 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
             children: (
               <DataTable
                 cardTitle="模板列表"
-                cardExtra={<Button onClick={() => openTemplateDrawer()}>新建模板</Button>}
-                cardToolbar={(
+                cardExtra={canWriteOutbound ? <Button onClick={() => openTemplateDrawer()}>新建模板</Button> : undefined}
+                cardToolbar={canWriteOutbound ? (
                   <>
                     <BatchActionsBar selectedCount={selectedTemplates.length} onClear={clearSelectedTemplates}>
                       <Button onClick={() => void handleBatchToggleTemplates(true)}>
@@ -1134,11 +1186,11 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
                       </Popconfirm>
                     </BatchActionsBar>
                   </>
-                )}
+                ) : undefined}
                 columns={templateColumns}
                 dataSource={templates}
                 loading={loadingBase}
-                rowSelection={templateRowSelection}
+                rowSelection={templateTableRowSelection}
                 rowKey="id"
                 pageSize={10}
               />
@@ -1150,8 +1202,8 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
             children: (
               <DataTable
                 cardTitle="联系人列表"
-                cardExtra={<Button onClick={() => openContactDrawer()}>新增联系人</Button>}
-                cardToolbar={(
+                cardExtra={canWriteOutbound ? <Button onClick={() => openContactDrawer()}>新增联系人</Button> : undefined}
+                cardToolbar={canWriteOutbound ? (
                   <>
                     <BatchActionsBar selectedCount={selectedContacts.length} onClear={clearSelectedContacts}>
                       <Button onClick={() => void handleBatchFavoriteContacts(true)}>
@@ -1170,11 +1222,11 @@ export default function OutboundEmailsPage({ onUnauthorized }: OutboundEmailsPag
                       </Popconfirm>
                     </BatchActionsBar>
                   </>
-                )}
+                ) : undefined}
                 columns={contactColumns}
                 dataSource={contacts}
                 loading={loadingBase}
-                rowSelection={contactRowSelection}
+                rowSelection={contactTableRowSelection}
                 rowKey="id"
                 pageSize={10}
               />

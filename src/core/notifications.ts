@@ -1,4 +1,5 @@
 import {
+  createNotificationDeliveryAttemptRecord,
   createNotificationDeliveryRecord,
   getAllNotificationEndpoints,
   getDueNotificationDeliveries,
@@ -202,8 +203,8 @@ async function attemptNotificationDelivery(
   endpoint: NotificationEndpointRecord,
   delivery: NotificationDeliveryRecord,
 ): Promise<NotificationDeliveryRecord> {
+  const startedAt = Date.now();
   const attemptCount = delivery.attempt_count + 1;
-  const attemptedAt = Date.now();
 
   try {
     const response_status = await sendNotification(
@@ -213,12 +214,29 @@ async function attemptNotificationDelivery(
       delivery.scope,
       endpoint.secret || "",
     );
+    const attemptedAt = Date.now();
+    const durationMs = attemptedAt - startedAt;
 
     await updateNotificationDeliveryRecord(db, delivery.id, {
       attempt_count: attemptCount,
+      dead_letter_reason: "",
+      is_dead_letter: false,
       last_attempt_at: attemptedAt,
       last_error: "",
       next_retry_at: null,
+      response_status,
+      resolved_at: null,
+      resolved_by: "",
+      status: "success",
+    });
+    await recordNotificationAttemptSafely(db, {
+      attempt_number: attemptCount,
+      attempted_at: attemptedAt,
+      duration_ms: durationMs,
+      error_message: "",
+      next_retry_at: null,
+      notification_delivery_id: delivery.id,
+      notification_endpoint_id: endpoint.id,
       response_status,
       status: "success",
     });
@@ -227,24 +245,46 @@ async function attemptNotificationDelivery(
     return {
       ...delivery,
       attempt_count: attemptCount,
+      dead_letter_reason: "",
+      is_dead_letter: false,
       last_attempt_at: attemptedAt,
       last_error: "",
       next_retry_at: null,
       response_status,
+      resolved_at: null,
+      resolved_by: "",
       status: "success",
       updated_at: attemptedAt,
     };
   } catch (error) {
+    const attemptedAt = Date.now();
+    const durationMs = attemptedAt - startedAt;
     const response_status = error instanceof NotificationRequestError ? error.responseStatus : null;
     const last_error = error instanceof Error ? error.message : "notification delivery failed";
     const status = attemptCount < delivery.max_attempts ? "retrying" : "failed";
     const next_retry_at = status === "retrying" ? attemptedAt + getRetryDelay(attemptCount) : null;
+    const isDeadLetter = status === "failed";
 
     await updateNotificationDeliveryRecord(db, delivery.id, {
       attempt_count: attemptCount,
+      dead_letter_reason: isDeadLetter ? last_error : "",
+      is_dead_letter: isDeadLetter,
       last_attempt_at: attemptedAt,
       last_error,
       next_retry_at,
+      response_status,
+      resolved_at: null,
+      resolved_by: "",
+      status,
+    });
+    await recordNotificationAttemptSafely(db, {
+      attempt_number: attemptCount,
+      attempted_at: attemptedAt,
+      duration_ms: durationMs,
+      error_message: last_error,
+      next_retry_at,
+      notification_delivery_id: delivery.id,
+      notification_endpoint_id: endpoint.id,
       response_status,
       status,
     });
@@ -253,10 +293,14 @@ async function attemptNotificationDelivery(
     return {
       ...delivery,
       attempt_count: attemptCount,
+      dead_letter_reason: isDeadLetter ? last_error : "",
+      is_dead_letter: isDeadLetter,
       last_attempt_at: attemptedAt,
       last_error,
       next_retry_at,
       response_status,
+      resolved_at: null,
+      resolved_by: "",
       status,
       updated_at: attemptedAt,
     };
@@ -272,15 +316,52 @@ async function markDeliveryAsTerminalFailure(
   const attemptedAt = Date.now();
   await updateNotificationDeliveryRecord(db, delivery.id, {
     attempt_count: delivery.attempt_count,
+    dead_letter_reason: errorMessage,
+    is_dead_letter: true,
     last_attempt_at: attemptedAt,
     last_error: errorMessage,
     next_retry_at: null,
+    response_status: null,
+    resolved_at: null,
+    resolved_by: "",
+    status: "failed",
+  });
+  await recordNotificationAttemptSafely(db, {
+    attempt_number: Math.max(1, delivery.attempt_count + 1),
+    attempted_at: attemptedAt,
+    duration_ms: 0,
+    error_message: errorMessage,
+    next_retry_at: null,
+    notification_delivery_id: delivery.id,
+    notification_endpoint_id: delivery.notification_endpoint_id,
     response_status: null,
     status: "failed",
   });
 
   if (endpointId) {
     await updateNotificationDelivery(db, endpointId, "failed", errorMessage);
+  }
+}
+
+async function recordNotificationAttemptSafely(
+  db: D1Database,
+  input: {
+    attempt_number: number;
+    attempted_at: number;
+    duration_ms: number | null;
+    error_message: string;
+    next_retry_at: number | null;
+    notification_delivery_id: number;
+    notification_endpoint_id: number;
+    response_status: number | null;
+    status: NotificationDeliveryStatus;
+  },
+): Promise<void> {
+  try {
+    await createNotificationDeliveryAttemptRecord(db, input);
+  } catch (error) {
+    if (isSqliteSchemaError(error)) return;
+    throw error;
   }
 }
 

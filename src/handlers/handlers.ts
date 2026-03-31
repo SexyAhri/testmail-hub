@@ -1,10 +1,13 @@
 import {
   addAuditLog,
+  archiveEmail,
   applyMailboxSyncCandidate,
   backfillMailboxWorkspaceScope,
+  buildRetentionPolicyScopeKey,
   createApiToken,
   createAdminUser,
   createDomainAsset,
+  createDomainRoutingProfile,
   createEnvironment,
   createMailbox,
   createMailboxPool,
@@ -12,10 +15,12 @@ import {
   createOutboundContact,
   createOutboundTemplate,
   createProject,
+  createRetentionPolicy,
   createRule,
   createWhitelistEntry,
   deleteApiToken,
   deleteDomainAsset,
+  deleteDomainRoutingProfile,
   deleteEnvironment,
   deleteMailbox,
   deleteMailboxPool,
@@ -24,11 +29,13 @@ import {
   deleteOutboundEmailRecord,
   deleteProject,
   deleteOutboundTemplate,
+  deleteRetentionPolicy,
   deleteRule,
   deleteWhitelistEntry,
   findAdminUserByUsername,
   getApiTokenById,
   getApiTokensPaged,
+  getAdminAccessContext,
   getAdminUsersPaged,
   getAttachmentContent,
   getAuditLogsPaged,
@@ -37,6 +44,8 @@ import {
   getDomainAssetById,
   getDomainAssetByName,
   getDomainAssetsPaged,
+  getDomainRoutingProfileById,
+  getDomainRoutingProfilesPaged,
   getDomainAssetUsageStats,
   getEmailByMessageIdScoped,
   getEmailProjectIds,
@@ -50,6 +59,7 @@ import {
   getMailboxesPaged,
   getNotificationEndpointById,
   getNotificationDeliveriesPaged,
+  getNotificationDeliveryAttemptsPaged,
   getNotificationDeliveryById,
   getNotificationEndpointsPaged,
   getObservedMailboxStats,
@@ -60,18 +70,25 @@ import {
   getOutboundStats,
   getOutboundTemplates,
   getProjectById,
+  getRetentionJobRunsPaged,
   getOverviewStats,
+  getRetentionPolicyById,
+  getRetentionPoliciesPaged,
   getRulesPaged,
   getWhitelistSettings,
   getWhitelistPaged,
   getWorkspaceCatalog,
   purgeEmail,
+  resolveMailboxExpirationTimestamp,
+  resolveRetentionPolicyConfig,
   restoreEmail,
+  resolveNotificationDeliveryDeadLetter,
   softDeleteEmail,
   touchAdminUserLogin,
   updateApiToken,
   updateAdminUser,
   updateDomainAsset,
+  updateDomainRoutingProfile,
   updateEnvironment,
   updateEmailMetadata,
   updateMailbox,
@@ -81,10 +98,12 @@ import {
   updateOutboundEmailSettings,
   updateOutboundTemplate,
   updateProject,
+  updateRetentionPolicy,
   updateRule,
-  validateWorkspaceAssignment,
   updateWhitelistSettings,
   updateWhitelistEntry,
+  unarchiveEmail,
+  validateWorkspaceAssignment,
 } from "../core/db";
 import {
   deleteCloudflareMailboxRouteByConfig,
@@ -100,6 +119,7 @@ import {
   createManagedApiTokenValue,
   createBootstrapSessionCookie,
   createSessionCookie,
+  hasPermission,
   hashApiTokenValue,
   hashPassword,
   verifyPassword,
@@ -114,6 +134,12 @@ import {
   validateOutboundTemplateInput,
 } from "../core/outbound";
 import { persistOutboundEmail } from "../core/outbound-service";
+import {
+  domainProviderSupports,
+  getDomainProviderDefinition,
+  getDomainProviderLabel,
+  listDomainProviders,
+} from "../shared/domain-providers";
 import {
   retryNotificationDelivery,
   sendEventNotifications,
@@ -132,16 +158,24 @@ import {
   MAX_MAILBOX_ADDRESS_LENGTH,
   MAX_MAILBOX_NOTE_LENGTH,
   MAX_MAILBOX_TAGS,
+  MAX_RETENTION_HOURS,
   MAX_SCOPE_BINDINGS,
   MAX_WORKSPACE_DESCRIPTION_LENGTH,
   MAX_WORKSPACE_NAME_LENGTH,
   MAX_WORKSPACE_SLUG_LENGTH,
+  normalizeAdminRole,
   OUTBOUND_EMAIL_PAGE_SIZE,
+  RETENTION_JOB_PAGE_SIZE,
+  RETENTION_POLICY_PAGE_SIZE,
+  requiresBoundAdminScope,
+  requiresGlobalAdminScope,
+  isReadOnlyAdminRole,
   MAX_RULE_PATTERN_LENGTH,
   MAX_RULE_REMARK_LENGTH,
   MAX_SENDER_FILTER_LENGTH,
   MAX_SENDER_PATTERN_LENGTH,
-  NOTIFICATION_EVENTS,
+  normalizeNotificationAlertConfig,
+  normalizeNotificationEventValues,
   PAGE_SIZE,
   RULES_PAGE_SIZE,
 } from "../utils/constants";
@@ -160,6 +194,7 @@ import {
   maybeBoolean,
   normalizeEmailAddress,
   normalizeTags,
+  parseArchivedFilter,
   parseDeletedFilter,
   readJsonBody,
   safeParseJson,
@@ -179,7 +214,10 @@ import type {
   D1Database,
   DomainAssetRecord,
   DomainAssetStatusRecord,
+  DomainCatchAllSource,
+  DomainRoutingProfileRecord,
   EmailDetail,
+  JsonValue,
   MailboxSyncResult,
   ProjectBindingRecord,
   WorkerEnv,
@@ -187,7 +225,6 @@ import type {
 
 const PASSWORD_MIN_LENGTH = 8;
 const DOMAIN_MAX_LENGTH = 253;
-const NOTIFICATION_EVENT_SET = new Set<string>(NOTIFICATION_EVENTS);
 const ACCESS_SCOPE_SET = new Set<string>(ACCESS_SCOPES);
 const API_TOKEN_PERMISSION_SET = new Set<string>(API_TOKEN_PERMISSIONS);
 
@@ -204,6 +241,10 @@ function getActorProjectIds(actor: AuthSession): number[] {
 
 function isActorProjectScoped(actor: AuthSession): boolean {
   return actor.access_scope === "bound";
+}
+
+function isActorReadOnly(actor: AuthSession): boolean {
+  return isReadOnlyAdminRole(actor.role, actor.access_scope || "all");
 }
 
 function getScopedProjectIds(actor?: AuthSession | null): number[] | null {
@@ -228,16 +269,31 @@ function ensureActorCanAccessProject(actor: AuthSession, projectId: number | nul
   }
 }
 
-function ensureActorCanCreateProject(actor: AuthSession) {
-  if (isActorProjectScoped(actor)) {
-    throw new Error("project-scoped admin cannot create project");
+function ensureActorCanWrite(actor: AuthSession) {
+  if (isActorReadOnly(actor)) {
+    throw new Error("read-only role cannot modify resources");
   }
 }
 
-function ensureActorCanDeleteProject(actor: AuthSession) {
+function ensureActorCanManageGlobalSettings(actor: AuthSession) {
+  ensureActorCanWrite(actor);
   if (isActorProjectScoped(actor)) {
-    throw new Error("project-scoped admin cannot delete project");
+    throw new Error("project-scoped admin cannot manage global settings");
   }
+}
+
+function ensureActorCanReadGlobalSettings(actor: AuthSession) {
+  if (isActorProjectScoped(actor)) {
+    throw new Error("project-scoped admin cannot access global observability");
+  }
+}
+
+function ensureActorCanCreateProject(actor: AuthSession) {
+  ensureActorCanManageGlobalSettings(actor);
+}
+
+function ensureActorCanDeleteProject(actor: AuthSession) {
+  ensureActorCanManageGlobalSettings(actor);
 }
 
 function ensureActorCanAccessAnyProject(actor: AuthSession, projectIds: number[]) {
@@ -269,8 +325,82 @@ function isValidDomainValue(domain: string): boolean {
 }
 
 function ensureActorCanManageDomains(actor: AuthSession) {
-  if (isActorProjectScoped(actor)) {
-    throw new Error("project-scoped admin cannot manage domains");
+  ensureActorCanWrite(actor);
+  if (isActorProjectScoped(actor) && getActorProjectIds(actor).length === 0) {
+    throw new Error("project-scoped admin has no bound projects");
+  }
+}
+
+function ensureActorCanManageAdmins(actor: AuthSession) {
+  if (!hasPermission(actor.role, "admins:write")) {
+    throw new Error("permission denied");
+  }
+  if (isActorProjectScoped(actor) && getActorProjectIds(actor).length === 0) {
+    throw new Error("project-scoped admin has no bound projects");
+  }
+}
+
+function ensureActorCanManageOwnerAccount(
+  actor: AuthSession,
+  nextRole?: AdminRole | null,
+  existingRole?: AdminRole | null,
+) {
+  if ((nextRole === "owner" || existingRole === "owner") && actor.role !== "owner") {
+    throw new Error("only owner can manage owner accounts");
+  }
+}
+
+function ensureActorCanManageAdminRecord(
+  actor: AuthSession,
+  record: {
+    access_scope: AccessScope;
+    project_ids: number[];
+    role: AdminRole;
+  },
+) {
+  ensureActorCanManageAdmins(actor);
+  ensureActorCanManageOwnerAccount(actor, null, record.role);
+
+  if (!isActorProjectScoped(actor)) return;
+
+  const actorProjectIds = getActorProjectIds(actor);
+  if (record.access_scope !== "bound") {
+    throw new Error("project-scoped admin cannot manage global admin accounts");
+  }
+  if (record.project_ids.length === 0) {
+    throw new Error("admin user has no bound projects");
+  }
+  if (record.project_ids.some(projectId => !actorProjectIds.includes(projectId))) {
+    throw new Error("admin user is outside your scope");
+  }
+}
+
+function ensureActorCanAssignAdminRole(
+  actor: AuthSession,
+  role: AdminRole,
+  access_scope: AccessScope,
+) {
+  ensureActorCanManageOwnerAccount(actor, role, null);
+
+  if (requiresGlobalAdminScope(role, access_scope) && access_scope !== "all") {
+    throw new Error("platform_admin and owner must keep global scope");
+  }
+  if (requiresBoundAdminScope(role, access_scope) && access_scope !== "bound") {
+    throw new Error("project_admin must use bound access_scope");
+  }
+
+  if (!isActorProjectScoped(actor)) {
+    if (actor.role !== "owner" && role === "owner") {
+      throw new Error("only owner can manage owner accounts");
+    }
+    return;
+  }
+
+  if (access_scope !== "bound") {
+    throw new Error("project-scoped admin cannot manage global admin accounts");
+  }
+  if (!["project_admin", "operator", "viewer"].includes(role)) {
+    throw new Error("project-scoped admin can only manage project_admin, operator, or viewer roles");
   }
 }
 
@@ -288,11 +418,81 @@ function domainMatchesWorkspace(
   return asset.environment_id === workspace.environment_id;
 }
 
+function routingProfileMatchesWorkspace(
+  profile: Pick<DomainRoutingProfileRecord, "environment_id" | "project_id">,
+  workspace: Pick<DomainAssetRecord, "environment_id" | "project_id">,
+): boolean {
+  if (profile.project_id === null) return true;
+  if (workspace.project_id === null) return false;
+  if (profile.project_id !== workspace.project_id) return false;
+  if (profile.environment_id === null) return true;
+  return workspace.environment_id === profile.environment_id;
+}
+
+function resolveEffectiveDomainCatchAllPolicy(
+  asset: Pick<
+    DomainAssetRecord,
+    | "catch_all_forward_to"
+    | "catch_all_mode"
+    | "routing_profile_catch_all_forward_to"
+    | "routing_profile_catch_all_mode"
+    | "routing_profile_enabled"
+    | "routing_profile_id"
+  >,
+): {
+  catch_all_forward_to: string;
+  catch_all_mode: CatchAllMode;
+  catch_all_source: DomainCatchAllSource;
+} {
+  if (asset.catch_all_mode !== "inherit") {
+    return {
+      catch_all_forward_to: asset.catch_all_forward_to,
+      catch_all_mode: asset.catch_all_mode,
+      catch_all_source: "domain",
+    };
+  }
+
+  if (asset.routing_profile_id && asset.routing_profile_enabled && asset.routing_profile_catch_all_mode !== "inherit") {
+    return {
+      catch_all_forward_to: asset.routing_profile_catch_all_forward_to,
+      catch_all_mode: asset.routing_profile_catch_all_mode,
+      catch_all_source: "routing_profile",
+    };
+  }
+
+  return {
+    catch_all_forward_to: "",
+    catch_all_mode: "inherit",
+    catch_all_source: "inherit",
+  };
+}
+
+function domainAllowsMailboxCreation(
+  asset: Pick<DomainAssetRecord, "allow_new_mailboxes" | "is_enabled">,
+) {
+  return asset.is_enabled && asset.allow_new_mailboxes;
+}
+
+function domainAllowsMailboxRouteSync(
+  asset: Pick<DomainAssetRecord, "allow_mailbox_route_sync" | "is_enabled" | "provider">,
+) {
+  return (
+    asset.is_enabled
+    && asset.allow_mailbox_route_sync
+    && domainProviderSupports(asset.provider, "mailbox_route_sync")
+  );
+}
+
+interface DomainPoolOptions {
+  allowMailboxCreationOnly?: boolean;
+}
+
 async function getDomainPool(
   db: D1Database,
   env: WorkerEnv,
   actor?: AuthSession,
   workspace?: DomainWorkspaceScope | null,
+  options: DomainPoolOptions = {},
 ): Promise<string[]> {
   const domains = new Set<string>();
 
@@ -303,7 +503,10 @@ async function getDomainPool(
       getScopedProjectIds(actor),
     );
     for (const item of configured) {
-      if (item.is_enabled && domainMatchesWorkspace(item, workspace)) {
+      const matchesGovernance = options.allowMailboxCreationOnly
+        ? domainAllowsMailboxCreation(item)
+        : item.is_enabled;
+      if (matchesGovernance && domainMatchesWorkspace(item, workspace)) {
         domains.add(item.domain);
       }
     }
@@ -315,9 +518,17 @@ async function getDomainPool(
   if (fallbackDomain) {
     try {
       const fallbackAsset = await getDomainAssetByName(db, fallbackDomain);
+      const matchesGovernance = !fallbackAsset
+        || (
+          options.allowMailboxCreationOnly
+            ? domainAllowsMailboxCreation(fallbackAsset)
+            : fallbackAsset.is_enabled
+        );
       if (
         !fallbackAsset
         || (
+          matchesGovernance
+          &&
           fallbackAsset.is_enabled
           && domainMatchesWorkspace(fallbackAsset, workspace)
           && (!actor || canAccessProject(actor, fallbackAsset.project_id))
@@ -331,7 +542,7 @@ async function getDomainPool(
     }
   }
 
-  if (domains.size === 0) {
+  if (domains.size === 0 && !options.allowMailboxCreationOnly) {
     const observed = await getAvailableDomains(db, getScopedProjectIds(actor));
     for (const item of observed) domains.add(item);
   }
@@ -344,10 +555,16 @@ async function getDefaultMailboxDomain(
   env: WorkerEnv,
   actor?: AuthSession,
   workspace?: DomainWorkspaceScope | null,
+  options: DomainPoolOptions = {},
 ): Promise<string> {
   try {
     const all = await getAllDomainAssets(db, false, getScopedProjectIds(actor));
-    const matching = all.filter(item => item.is_enabled && domainMatchesWorkspace(item, workspace));
+    const matching = all.filter(item => {
+      const matchesGovernance = options.allowMailboxCreationOnly
+        ? domainAllowsMailboxCreation(item)
+        : item.is_enabled;
+      return matchesGovernance && domainMatchesWorkspace(item, workspace);
+    });
     const primary = matching.find(item => item.is_primary);
     if (primary?.domain) return primary.domain;
     if (matching[0]?.domain) return matching[0].domain;
@@ -360,9 +577,17 @@ async function getDefaultMailboxDomain(
 
   try {
     const fallbackAsset = await getDomainAssetByName(db, fallbackDomain);
+    const matchesGovernance = !fallbackAsset
+      || (
+        options.allowMailboxCreationOnly
+          ? domainAllowsMailboxCreation(fallbackAsset)
+          : fallbackAsset.is_enabled
+      );
     if (
       !fallbackAsset
       || (
+        matchesGovernance
+        &&
         fallbackAsset.is_enabled
         && domainMatchesWorkspace(fallbackAsset, workspace)
         && (!actor || canAccessProject(actor, fallbackAsset.project_id))
@@ -387,7 +612,7 @@ async function resolveMailboxSyncConfig(
 
   try {
     const asset = await getDomainAssetByName(db, normalizedDomain);
-    if (asset && asset.is_enabled && asset.provider === "cloudflare") {
+    if (asset && domainAllowsMailboxRouteSync(asset)) {
       return resolveCloudflareMailboxRouteConfig(env, {
         domain: asset.domain,
         email_worker: asset.email_worker,
@@ -415,7 +640,7 @@ async function getCloudflareDomainConfigs(
     const configured = await getAllDomainAssets(db, false);
     for (const item of configured) {
       const config =
-        item.provider === "cloudflare"
+        domainAllowsMailboxRouteSync(item)
           ? resolveCloudflareMailboxRouteConfig(env, {
               domain: item.domain,
               email_worker: item.email_worker,
@@ -486,8 +711,17 @@ async function listDomainAssetStatusRecords(
 
   return Promise.all(domains.map(async domain => {
     const asset = assetMap.get(domain);
+    const effectivePolicy = asset
+      ? resolveEffectiveDomainCatchAllPolicy(asset)
+      : {
+          catch_all_forward_to: "",
+          catch_all_mode: "inherit" as CatchAllMode,
+          catch_all_source: "inherit" as DomainCatchAllSource,
+        };
+    const provider = asset?.provider || (domain === normalizeDomainValue(env.MAILBOX_DOMAIN) ? "cloudflare" : "");
+    const canReadProviderStatus = domainProviderSupports(provider, "status_read");
     const config =
-      asset?.provider === "cloudflare"
+      asset?.provider && domainProviderSupports(asset.provider, "status_read")
         ? resolveCloudflareMailboxRouteConfig(env, {
             domain: asset.domain,
             email_worker: asset.email_worker,
@@ -499,20 +733,25 @@ async function listDomainAssetStatusRecords(
 
     const usage = usageMap.get(domain);
 
-    if (!isCloudflareMailboxRouteConfigConfigured(config)) {
+    if (!config || !canReadProviderStatus || !isCloudflareMailboxRouteConfigConfigured(config)) {
       return {
         active_mailbox_total: usage?.active_mailbox_total || 0,
-        catch_all_drift: asset?.catch_all_mode === "enabled",
+        allow_mailbox_route_sync: asset?.allow_mailbox_route_sync ?? true,
+        allow_new_mailboxes: asset?.allow_new_mailboxes ?? true,
+        catch_all_drift: effectivePolicy.catch_all_mode === "enabled",
         catch_all_enabled: false,
-        catch_all_forward_to: asset?.catch_all_forward_to || "",
+        catch_all_forward_to: effectivePolicy.catch_all_forward_to,
         catch_all_forward_to_actual: "",
-        catch_all_mode: asset?.catch_all_mode || "inherit",
+        catch_all_mode: effectivePolicy.catch_all_mode,
+        catch_all_source: effectivePolicy.catch_all_source,
         cloudflare_configured: false,
         cloudflare_error: "",
         cloudflare_routes_total: 0,
         domain,
         email_total: usage?.email_total || 0,
         observed_mailbox_total: usage?.observed_mailbox_total || 0,
+        provider,
+        routing_profile_name: asset?.routing_profile_name || "",
       } satisfies DomainAssetStatusRecord;
     }
 
@@ -520,36 +759,46 @@ async function listDomainAssetStatusRecords(
       const snapshot = await getCloudflareMailboxSyncSnapshotByConfig(config);
       return {
         active_mailbox_total: usage?.active_mailbox_total || 0,
+        allow_mailbox_route_sync: asset?.allow_mailbox_route_sync ?? true,
+        allow_new_mailboxes: asset?.allow_new_mailboxes ?? true,
         catch_all_drift: isCatchAllDrifted(
-          asset?.catch_all_mode || "inherit",
-          asset?.catch_all_forward_to || "",
+          effectivePolicy.catch_all_mode,
+          effectivePolicy.catch_all_forward_to,
           snapshot,
         ),
         catch_all_enabled: snapshot.catch_all_enabled,
-        catch_all_forward_to: asset?.catch_all_forward_to || "",
+        catch_all_forward_to: effectivePolicy.catch_all_forward_to,
         catch_all_forward_to_actual: snapshot.catch_all_forward_to,
-        catch_all_mode: asset?.catch_all_mode || "inherit",
+        catch_all_mode: effectivePolicy.catch_all_mode,
+        catch_all_source: effectivePolicy.catch_all_source,
         cloudflare_configured: snapshot.configured,
         cloudflare_error: "",
         cloudflare_routes_total: snapshot.candidates.length,
         domain,
         email_total: usage?.email_total || 0,
         observed_mailbox_total: usage?.observed_mailbox_total || 0,
+        provider,
+        routing_profile_name: asset?.routing_profile_name || "",
       } satisfies DomainAssetStatusRecord;
     } catch (error) {
       return {
         active_mailbox_total: usage?.active_mailbox_total || 0,
-        catch_all_drift: asset?.catch_all_mode === "enabled",
+        allow_mailbox_route_sync: asset?.allow_mailbox_route_sync ?? true,
+        allow_new_mailboxes: asset?.allow_new_mailboxes ?? true,
+        catch_all_drift: effectivePolicy.catch_all_mode === "enabled",
         catch_all_enabled: false,
-        catch_all_forward_to: asset?.catch_all_forward_to || "",
+        catch_all_forward_to: effectivePolicy.catch_all_forward_to,
         catch_all_forward_to_actual: "",
-        catch_all_mode: asset?.catch_all_mode || "inherit",
+        catch_all_mode: effectivePolicy.catch_all_mode,
+        catch_all_source: effectivePolicy.catch_all_source,
         cloudflare_configured: true,
         cloudflare_error: error instanceof Error ? error.message : "failed to fetch Cloudflare status",
         cloudflare_routes_total: 0,
         domain,
         email_total: usage?.email_total || 0,
         observed_mailbox_total: usage?.observed_mailbox_total || 0,
+        provider,
+        routing_profile_name: asset?.routing_profile_name || "",
       } satisfies DomainAssetStatusRecord;
     }
   }));
@@ -557,6 +806,60 @@ async function listDomainAssetStatusRecords(
 
 function toAuditDetail(value: unknown) {
   return JSON.parse(JSON.stringify(value || {}));
+}
+
+function normalizeAdminAuditProjectIds(project_ids: number[]) {
+  return Array.from(
+    new Set(
+      (Array.isArray(project_ids) ? project_ids : [])
+        .filter(projectId => Number.isFinite(projectId) && projectId > 0)
+        .map(projectId => Math.floor(projectId)),
+    ),
+  ).sort((left, right) => left - right);
+}
+
+function toAdminAuditSnapshot(input: {
+  access_scope: AccessScope;
+  display_name: string;
+  is_enabled: boolean;
+  note: string;
+  project_ids: number[];
+  role: AdminRole;
+  username: string;
+}) {
+  return {
+    access_scope: input.access_scope,
+    display_name: input.display_name,
+    is_enabled: input.is_enabled,
+    note: input.note,
+    project_ids: normalizeAdminAuditProjectIds(input.project_ids),
+    role: input.role,
+    username: input.username,
+  };
+}
+
+function buildAdminUpdateAuditDetail(
+  previous: ReturnType<typeof toAdminAuditSnapshot>,
+  next: ReturnType<typeof toAdminAuditSnapshot>,
+) {
+  const changed_fields: string[] = [];
+
+  if (previous.display_name !== next.display_name) changed_fields.push("display_name");
+  if (previous.role !== next.role) changed_fields.push("role");
+  if (previous.access_scope !== next.access_scope) changed_fields.push("access_scope");
+  if (previous.is_enabled !== next.is_enabled) changed_fields.push("is_enabled");
+  if (previous.note !== next.note) changed_fields.push("note");
+  if (JSON.stringify(previous.project_ids) !== JSON.stringify(next.project_ids)) {
+    changed_fields.push("project_ids");
+  }
+
+  return toAuditDetail({
+    changed_fields,
+    display_name: next.display_name,
+    next,
+    previous,
+    username: next.username,
+  });
 }
 
 export async function handleAdminLogin(
@@ -958,6 +1261,7 @@ export async function handleAdminEmails(
   const page = clampPage(url.searchParams.get("page"));
   const payload = await getEmails(db, page, PAGE_SIZE, {
     address: normalizeNullable(url.searchParams.get("address")),
+    archived: parseArchivedFilter(url.searchParams.get("archived")),
     date_from: clampNumber(url.searchParams.get("date_from"), { min: 0 }),
     date_to: clampNumber(url.searchParams.get("date_to"), { min: 0 }),
     deleted: parseDeletedFilter(url.searchParams.get("deleted")),
@@ -998,6 +1302,12 @@ export async function handleAdminEmailMetadataPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const messageId = decodeURIComponent(
     pathname.replace("/admin/emails/", "").replace("/metadata", ""),
   );
@@ -1034,6 +1344,12 @@ export async function handleAdminEmailDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const messageId = decodeURIComponent(
     pathname.replace("/admin/emails/", "").split("/")[0] || "",
   );
@@ -1079,6 +1395,12 @@ export async function handleAdminEmailRestore(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const messageId = decodeURIComponent(
     pathname.replace("/admin/emails/", "").replace("/restore", ""),
   );
@@ -1124,6 +1446,12 @@ export async function handleAdminEmailPurge(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const messageId = decodeURIComponent(
     pathname.replace("/admin/emails/", "").replace("/purge", ""),
   );
@@ -1144,6 +1472,129 @@ export async function handleAdminEmailPurge(
     entity_id: messageId,
     entity_type: "email",
   });
+  return json({ ok: true });
+}
+
+export async function handleAdminEmailArchive(
+  pathname: string,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const messageId = decodeURIComponent(
+    pathname.replace("/admin/emails/", "").replace("/archive", ""),
+  );
+  if (!messageId) return jsonError("invalid email id", 400);
+
+  const existing = await getEmailByMessageIdScoped(
+    db,
+    messageId,
+    getActorProjectIds(actor),
+  );
+  if (!existing) return jsonError("email not found", 404);
+  if (existing.deleted_at) return jsonError("deleted email cannot be archived", 409);
+  if (existing.archived_at) return jsonError("email is already archived", 409);
+
+  await archiveEmail(db, messageId, {
+    archive_reason: "manual",
+    archived_by: actor.username,
+  });
+  await addAuditLog(db, {
+    action: "email.archive",
+    actor,
+    detail: { archive_reason: "manual", message_id: messageId },
+    entity_id: messageId,
+    entity_type: "email",
+  });
+  const project_ids = await getEmailProjectIds(db, messageId);
+  const scopedProjectIds =
+    project_ids.length > 0
+      ? project_ids
+      : existing.project_id
+        ? [existing.project_id]
+        : [];
+  await sendEventNotifications(
+    db,
+    "email.archived",
+    {
+      actor: actor.username,
+      archive_reason: "manual",
+      message_id: messageId,
+      project_id: existing.project_id,
+      project_ids: scopedProjectIds,
+      source: "admin_action",
+    },
+    {
+      environment_id: existing.environment_id,
+      mailbox_pool_id: existing.mailbox_pool_id,
+      project_id: existing.project_id,
+      project_ids: scopedProjectIds,
+    },
+  );
+  return json({ ok: true });
+}
+
+export async function handleAdminEmailUnarchive(
+  pathname: string,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const messageId = decodeURIComponent(
+    pathname.replace("/admin/emails/", "").replace("/unarchive", ""),
+  );
+  if (!messageId) return jsonError("invalid email id", 400);
+
+  const existing = await getEmailByMessageIdScoped(
+    db,
+    messageId,
+    getActorProjectIds(actor),
+  );
+  if (!existing) return jsonError("email not found", 404);
+  if (!existing.archived_at) return jsonError("email is not archived", 409);
+
+  await unarchiveEmail(db, messageId);
+  await addAuditLog(db, {
+    action: "email.unarchive",
+    actor,
+    detail: { message_id: messageId },
+    entity_id: messageId,
+    entity_type: "email",
+  });
+  const project_ids = await getEmailProjectIds(db, messageId);
+  const scopedProjectIds =
+    project_ids.length > 0
+      ? project_ids
+      : existing.project_id
+        ? [existing.project_id]
+        : [];
+  await sendEventNotifications(
+    db,
+    "email.unarchived",
+    {
+      actor: actor.username,
+      message_id: messageId,
+      project_id: existing.project_id,
+      project_ids: scopedProjectIds,
+      source: "admin_action",
+    },
+    {
+      environment_id: existing.environment_id,
+      mailbox_pool_id: existing.mailbox_pool_id,
+      project_id: existing.project_id,
+      project_ids: scopedProjectIds,
+    },
+  );
   return json({ ok: true });
 }
 
@@ -1188,6 +1639,10 @@ export async function handleAdminDomains(
   actor: AuthSession,
   env: WorkerEnv,
 ): Promise<Response> {
+  const purpose = String(url.searchParams.get("purpose") || "").trim().toLowerCase();
+  const domainPoolOptions: DomainPoolOptions = {
+    allowMailboxCreationOnly: purpose === "mailbox_create",
+  };
   const requestedScope = {
     environment_id: clampNumber(url.searchParams.get("environment_id"), { min: 1 }),
     project_id: clampNumber(url.searchParams.get("project_id"), { min: 1 }),
@@ -1212,8 +1667,8 @@ export async function handleAdminDomains(
     };
   }
 
-  const domains = await getDomainPool(db, env, actor, workspace);
-  const default_domain = await getDefaultMailboxDomain(db, env, actor, workspace);
+  const domains = await getDomainPool(db, env, actor, workspace, domainPoolOptions);
+  const default_domain = await getDefaultMailboxDomain(db, env, actor, workspace, domainPoolOptions);
   return json({ default_domain, domains });
 }
 
@@ -1239,6 +1694,10 @@ export async function handleAdminDomainAssetsStatusGet(
   actor: AuthSession,
 ): Promise<Response> {
   return json(await listDomainAssetStatusRecords(db, env, actor));
+}
+
+export async function handleAdminDomainProvidersGet(): Promise<Response> {
+  return json(listDomainProviders());
 }
 
 export async function handleAdminDomainAssetsPost(
@@ -1267,6 +1726,17 @@ export async function handleAdminDomainAssetsPost(
       error instanceof Error ? error.message : "project access denied",
       403,
     );
+  }
+
+  if (validation.data.routing_profile_id) {
+    const routingProfile = await getDomainRoutingProfileById(db, validation.data.routing_profile_id);
+    if (!routingProfile) return jsonError("routing profile not found", 404);
+    if (routingProfile.provider !== validation.data.provider) {
+      return jsonError("routing profile provider does not match domain provider", 400);
+    }
+    if (!routingProfileMatchesWorkspace(routingProfile, workspaceScope.data)) {
+      return jsonError("routing profile does not match domain workspace", 400);
+    }
   }
 
   const nextAsset = {
@@ -1302,6 +1772,14 @@ export async function handleAdminDomainAssetsPut(
 
   const existing = await getDomainAssetById(db, id);
   if (!existing) return jsonError("domain not found", 404);
+  try {
+    ensureActorCanAccessProject(actor, existing.project_id);
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : "project access denied",
+      403,
+    );
+  }
 
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
@@ -1320,15 +1798,64 @@ export async function handleAdminDomainAssetsPut(
     );
   }
 
+  if (validation.data.routing_profile_id) {
+    const routingProfile = await getDomainRoutingProfileById(db, validation.data.routing_profile_id);
+    if (!routingProfile) return jsonError("routing profile not found", 404);
+    if (routingProfile.provider !== validation.data.provider) {
+      return jsonError("routing profile provider does not match domain provider", 400);
+    }
+    if (!routingProfileMatchesWorkspace(routingProfile, workspaceScope.data)) {
+      return jsonError("routing profile does not match domain workspace", 400);
+    }
+  }
+
   const nextAsset = {
     ...validation.data,
     ...workspaceScope.data,
   };
   await updateDomainAsset(db, id, nextAsset);
+  const governanceChanged =
+    existing.allow_new_mailboxes !== nextAsset.allow_new_mailboxes
+    || existing.allow_mailbox_route_sync !== nextAsset.allow_mailbox_route_sync;
+  const changeKinds = new Set<string>();
+  if (governanceChanged) changeKinds.add("governance");
+  if (
+    existing.domain !== nextAsset.domain
+    || existing.provider !== nextAsset.provider
+    || existing.zone_id !== nextAsset.zone_id
+    || existing.email_worker !== nextAsset.email_worker
+    || existing.catch_all_mode !== nextAsset.catch_all_mode
+    || existing.catch_all_forward_to !== nextAsset.catch_all_forward_to
+    || existing.routing_profile_id !== nextAsset.routing_profile_id
+    || existing.is_enabled !== nextAsset.is_enabled
+    || existing.is_primary !== nextAsset.is_primary
+    || existing.note !== nextAsset.note
+    || existing.project_id !== nextAsset.project_id
+    || existing.environment_id !== nextAsset.environment_id
+  ) {
+    changeKinds.add("config");
+  }
+  const auditAction =
+    governanceChanged && changeKinds.size === 1
+      ? "domain.governance.update"
+      : "domain.update";
   await addAuditLog(db, {
-    action: "domain.update",
+    action: auditAction,
     actor,
-    detail: { id, previous_scope: { environment_id: existing.environment_id, project_id: existing.project_id }, ...nextAsset },
+    detail: {
+      id,
+      previous_governance: {
+        allow_mailbox_route_sync: existing.allow_mailbox_route_sync,
+        allow_new_mailboxes: existing.allow_new_mailboxes,
+      },
+      next_governance: {
+        allow_mailbox_route_sync: nextAsset.allow_mailbox_route_sync,
+        allow_new_mailboxes: nextAsset.allow_new_mailboxes,
+      },
+      previous_scope: { environment_id: existing.environment_id, project_id: existing.project_id },
+      change_kinds: Array.from(changeKinds),
+      ...nextAsset,
+    },
     entity_id: String(id),
     entity_type: "domain",
   });
@@ -1352,6 +1879,14 @@ export async function handleAdminDomainAssetsDelete(
 
   const existing = await getDomainAssetById(db, id);
   if (!existing) return jsonError("domain not found", 404);
+  try {
+    ensureActorCanAccessProject(actor, existing.project_id);
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : "project access denied",
+      403,
+    );
+  }
 
   await deleteDomainAsset(db, id);
   await addAuditLog(db, {
@@ -1382,12 +1917,21 @@ export async function handleAdminDomainAssetsSyncCatchAll(
 
   const asset = await getDomainAssetById(db, id);
   if (!asset) return jsonError("domain not found", 404);
-  if (asset.catch_all_mode === "inherit") {
+  try {
+    ensureActorCanAccessProject(actor, asset.project_id);
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : "project access denied",
+      403,
+    );
+  }
+  const effectivePolicy = resolveEffectiveDomainCatchAllPolicy(asset);
+  if (effectivePolicy.catch_all_mode === "inherit") {
     return jsonError("catch-all policy is set to inherit", 400);
   }
 
   const config =
-    asset.provider === "cloudflare"
+    domainProviderSupports(asset.provider, "catch_all_sync")
       ? resolveCloudflareMailboxRouteConfig(env, {
           domain: asset.domain,
           email_worker: asset.email_worker,
@@ -1395,13 +1939,16 @@ export async function handleAdminDomainAssetsSyncCatchAll(
         })
       : null;
   if (!isCloudflareMailboxRouteConfigConfigured(config)) {
-    return jsonError("Cloudflare routing is not configured for this domain", 400);
+    return jsonError(
+      `${getDomainProviderLabel(asset.provider)} does not expose catch-all sync for this domain`,
+      400,
+    );
   }
 
   try {
     const snapshot = await updateCloudflareCatchAllRuleByConfig(config, {
-      enabled: asset.catch_all_mode === "enabled",
-      forward_to: asset.catch_all_mode === "enabled" ? asset.catch_all_forward_to : null,
+      enabled: effectivePolicy.catch_all_mode === "enabled",
+      forward_to: effectivePolicy.catch_all_mode === "enabled" ? effectivePolicy.catch_all_forward_to : null,
     });
     await addAuditLog(db, {
       action: "domain.catch_all_sync",
@@ -1409,7 +1956,8 @@ export async function handleAdminDomainAssetsSyncCatchAll(
       detail: {
         catch_all_enabled: snapshot.catch_all_enabled,
         catch_all_forward_to: snapshot.catch_all_forward_to,
-        catch_all_mode: asset.catch_all_mode,
+        catch_all_mode: effectivePolicy.catch_all_mode,
+        catch_all_source: effectivePolicy.catch_all_source,
         domain: asset.domain,
         id,
       },
@@ -1436,6 +1984,167 @@ export async function handleAdminDomainAssetsSyncCatchAll(
   }
 }
 
+export async function handleAdminDomainRoutingProfilesGet(
+  url: URL,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  const page = clampPage(url.searchParams.get("page"));
+  return json(
+    await getDomainRoutingProfilesPaged(
+      db,
+      page,
+      ADMIN_PAGE_SIZE,
+      getScopedProjectIds(actor),
+    ),
+  );
+}
+
+export async function handleAdminDomainRoutingProfilesPost(
+  request: Request,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanManageDomains(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "domain access denied", 403);
+  }
+
+  const parsed = await readJsonBody<Record<string, unknown>>(request);
+  if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+
+  const validation = validateDomainRoutingProfileBody(parsed.data || {});
+  if (!validation.ok) return jsonError(validation.error, 400);
+
+  const workspaceScope = await resolveWorkspaceAssignment(db, validation.scope);
+  if (!workspaceScope.ok) return jsonError(workspaceScope.error, 400);
+  try {
+    ensureActorCanAccessProject(actor, workspaceScope.data.project_id);
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : "project access denied",
+      403,
+    );
+  }
+
+  const id = await createDomainRoutingProfile(db, {
+    ...validation.data,
+    ...workspaceScope.data,
+  });
+  await addAuditLog(db, {
+    action: "domain.routing_profile.create",
+    actor,
+    detail: { id, ...validation.data, ...workspaceScope.data },
+    entity_id: String(id),
+    entity_type: "domain_routing_profile",
+  });
+  return json({ ok: true });
+}
+
+export async function handleAdminDomainRoutingProfilesPut(
+  pathname: string,
+  request: Request,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanManageDomains(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "domain access denied", 403);
+  }
+
+  const match = pathname.match(/^\/admin\/domain-routing-profiles\/(\d+)$/);
+  const id = Number(match?.[1] || 0);
+  if (!Number.isFinite(id) || id <= 0) return jsonError("invalid routing profile id", 400);
+
+  const existing = await getDomainRoutingProfileById(db, id);
+  if (!existing) return jsonError("routing profile not found", 404);
+  try {
+    ensureActorCanAccessProject(actor, existing.project_id);
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : "project access denied",
+      403,
+    );
+  }
+
+  const parsed = await readJsonBody<Record<string, unknown>>(request);
+  if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+
+  const validation = validateDomainRoutingProfileBody(parsed.data || {});
+  if (!validation.ok) return jsonError(validation.error, 400);
+
+  const workspaceScope = await resolveWorkspaceAssignment(db, validation.scope);
+  if (!workspaceScope.ok) return jsonError(workspaceScope.error, 400);
+  try {
+    ensureActorCanAccessProject(actor, workspaceScope.data.project_id);
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : "project access denied",
+      403,
+    );
+  }
+
+  await updateDomainRoutingProfile(db, id, {
+    ...validation.data,
+    ...workspaceScope.data,
+  });
+  await addAuditLog(db, {
+    action: "domain.routing_profile.update",
+    actor,
+    detail: {
+      id,
+      previous_scope: {
+        environment_id: existing.environment_id,
+        project_id: existing.project_id,
+      },
+      ...validation.data,
+      ...workspaceScope.data,
+    },
+    entity_id: String(id),
+    entity_type: "domain_routing_profile",
+  });
+  return json({ ok: true });
+}
+
+export async function handleAdminDomainRoutingProfilesDelete(
+  pathname: string,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanManageDomains(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "domain access denied", 403);
+  }
+
+  const match = pathname.match(/^\/admin\/domain-routing-profiles\/(\d+)$/);
+  const id = Number(match?.[1] || 0);
+  if (!Number.isFinite(id) || id <= 0) return jsonError("invalid routing profile id", 400);
+
+  const existing = await getDomainRoutingProfileById(db, id);
+  if (!existing) return jsonError("routing profile not found", 404);
+  try {
+    ensureActorCanAccessProject(actor, existing.project_id);
+  } catch (error) {
+    return jsonError(
+      error instanceof Error ? error.message : "project access denied",
+      403,
+    );
+  }
+
+  await deleteDomainRoutingProfile(db, id);
+  await addAuditLog(db, {
+    action: "domain.routing_profile.delete",
+    actor,
+    detail: { id, name: existing.name, slug: existing.slug },
+    entity_id: String(id),
+    entity_type: "domain_routing_profile",
+  });
+  return json({ ok: true });
+}
+
 export async function handleAdminWorkspaceCatalog(
   url: URL,
   db: D1Database,
@@ -1443,6 +2152,263 @@ export async function handleAdminWorkspaceCatalog(
 ): Promise<Response> {
   const includeDisabled = url.searchParams.get("include_disabled") === "1";
   return json(await getWorkspaceCatalog(db, includeDisabled, getScopedProjectIds(actor)));
+}
+
+export async function handleAdminRetentionPoliciesGet(
+  url: URL,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  const page = clampPage(url.searchParams.get("page"));
+  const project_id = parseOptionalId(url.searchParams.get("project_id"));
+  const environment_id = parseOptionalId(url.searchParams.get("environment_id"));
+  const mailbox_pool_id = parseOptionalId(url.searchParams.get("mailbox_pool_id"));
+  const is_enabled = maybeBoolean(url.searchParams.get("is_enabled"));
+  const keyword = normalizeNullable(url.searchParams.get("keyword"));
+
+  try {
+    ensureActorCanAccessProject(actor, project_id);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "project access denied", 403);
+  }
+
+  return json(
+    await getRetentionPoliciesPaged(
+      db,
+      page,
+      RETENTION_POLICY_PAGE_SIZE,
+      {
+        environment_id,
+        is_enabled,
+        keyword,
+        mailbox_pool_id,
+        project_id,
+      },
+      getScopedProjectIds(actor),
+    ),
+  );
+}
+
+export async function handleAdminRetentionJobRunsGet(
+  url: URL,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanReadGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const page = clampPage(url.searchParams.get("page"));
+  const status = normalizeNullable(url.searchParams.get("status"));
+  const trigger_source = normalizeNullable(url.searchParams.get("trigger_source"));
+
+  return json(
+    await getRetentionJobRunsPaged(db, page, RETENTION_JOB_PAGE_SIZE, {
+      status:
+        status === "success" || status === "failed"
+          ? status
+          : null,
+      trigger_source,
+    }),
+  );
+}
+
+export async function handleAdminRetentionPoliciesPost(
+  request: Request,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const parsed = await readJsonBody<Record<string, unknown>>(request);
+  if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+
+  const validation = validateRetentionPolicyBody(parsed.data || {});
+  if (!validation.ok) return jsonError(validation.error, 400);
+
+  const requestedScope = {
+    environment_id: validation.data.environment_id,
+    mailbox_pool_id: validation.data.mailbox_pool_id,
+    project_id: validation.data.project_id,
+  };
+  if (!requestedScope.project_id && isActorProjectScoped(actor)) {
+    return jsonError("project-scoped admin cannot manage global settings", 403);
+  }
+
+  const workspaceScope = await resolveWorkspaceAssignment(db, requestedScope);
+  if (!workspaceScope.ok) return jsonError(workspaceScope.error, 400);
+
+  try {
+    if (workspaceScope.data.project_id === null) {
+      ensureActorCanManageGlobalSettings(actor);
+    } else {
+      ensureActorCanAccessProject(actor, workspaceScope.data.project_id);
+    }
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "project access denied", 403);
+  }
+
+  const scope_key = buildRetentionPolicyScopeKey(workspaceScope.data);
+  const policy = await createRetentionPolicy(db, {
+    ...validation.data,
+    ...workspaceScope.data,
+    scope_key,
+  });
+
+  await addAuditLog(db, {
+    action: "retention_policy.create",
+    actor,
+    detail: {
+      archive_email_hours: policy.archive_email_hours,
+      deleted_email_retention_hours: policy.deleted_email_retention_hours,
+      email_retention_hours: policy.email_retention_hours,
+      id: policy.id,
+      mailbox_ttl_hours: policy.mailbox_ttl_hours,
+      name: policy.name,
+      scope_key: policy.scope_key,
+      scope_level: policy.scope_level,
+      ...workspaceScope.data,
+    },
+    entity_id: String(policy.id),
+    entity_type: "retention_policy",
+  });
+
+  return json(policy);
+}
+
+export async function handleAdminRetentionPoliciesPut(
+  pathname: string,
+  request: Request,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const id = Number(pathname.replace("/admin/retention-policies/", ""));
+  if (!Number.isFinite(id) || id <= 0) return jsonError("invalid retention policy id", 400);
+
+  const existing = await getRetentionPolicyById(db, id, getScopedProjectIds(actor));
+  if (!existing) return jsonError("retention policy not found", 404);
+
+  try {
+    if (existing.project_id === null) {
+      ensureActorCanManageGlobalSettings(actor);
+    } else {
+      ensureActorCanAccessProject(actor, existing.project_id);
+    }
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "project access denied", 403);
+  }
+
+  const parsed = await readJsonBody<Record<string, unknown>>(request);
+  if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+
+  const validation = validateRetentionPolicyBody(parsed.data || {});
+  if (!validation.ok) return jsonError(validation.error, 400);
+
+  const requestedScope = {
+    environment_id: validation.data.environment_id,
+    mailbox_pool_id: validation.data.mailbox_pool_id,
+    project_id: validation.data.project_id,
+  };
+  if (!requestedScope.project_id && isActorProjectScoped(actor)) {
+    return jsonError("project-scoped admin cannot manage global settings", 403);
+  }
+
+  const workspaceScope = await resolveWorkspaceAssignment(db, requestedScope);
+  if (!workspaceScope.ok) return jsonError(workspaceScope.error, 400);
+
+  try {
+    if (workspaceScope.data.project_id === null) {
+      ensureActorCanManageGlobalSettings(actor);
+    } else {
+      ensureActorCanAccessProject(actor, workspaceScope.data.project_id);
+    }
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "project access denied", 403);
+  }
+
+  const scope_key = buildRetentionPolicyScopeKey(workspaceScope.data);
+  const policy = await updateRetentionPolicy(db, id, {
+    ...validation.data,
+    ...workspaceScope.data,
+    scope_key,
+  });
+
+  await addAuditLog(db, {
+    action: "retention_policy.update",
+    actor,
+    detail: {
+      archive_email_hours: policy.archive_email_hours,
+      deleted_email_retention_hours: policy.deleted_email_retention_hours,
+      email_retention_hours: policy.email_retention_hours,
+      id: policy.id,
+      mailbox_ttl_hours: policy.mailbox_ttl_hours,
+      name: policy.name,
+      previous_scope_key: existing.scope_key,
+      scope_key: policy.scope_key,
+      scope_level: policy.scope_level,
+      ...workspaceScope.data,
+    },
+    entity_id: String(policy.id),
+    entity_type: "retention_policy",
+  });
+
+  return json(policy);
+}
+
+export async function handleAdminRetentionPoliciesDelete(
+  pathname: string,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const id = Number(pathname.replace("/admin/retention-policies/", ""));
+  if (!Number.isFinite(id) || id <= 0) return jsonError("invalid retention policy id", 400);
+
+  const existing = await getRetentionPolicyById(db, id, getScopedProjectIds(actor));
+  if (!existing) return jsonError("retention policy not found", 404);
+
+  try {
+    if (existing.project_id === null) {
+      ensureActorCanManageGlobalSettings(actor);
+    } else {
+      ensureActorCanAccessProject(actor, existing.project_id);
+    }
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "project access denied", 403);
+  }
+
+  await deleteRetentionPolicy(db, id);
+  await addAuditLog(db, {
+    action: "retention_policy.delete",
+    actor,
+    detail: {
+      id,
+      name: existing.name,
+      scope_key: existing.scope_key,
+      scope_level: existing.scope_level,
+    },
+    entity_id: String(id),
+    entity_type: "retention_policy",
+  });
+
+  return json({ ok: true });
 }
 
 export async function handleAdminProjectsPost(
@@ -1481,6 +2447,12 @@ export async function handleAdminProjectsPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/projects/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid project id", 400);
 
@@ -1548,6 +2520,12 @@ export async function handleAdminEnvironmentsPost(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
@@ -1585,6 +2563,12 @@ export async function handleAdminEnvironmentsPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/environments/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid environment id", 400);
 
@@ -1636,6 +2620,12 @@ export async function handleAdminEnvironmentsDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/environments/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid environment id", 400);
 
@@ -1666,6 +2656,12 @@ export async function handleAdminMailboxPoolsPost(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
@@ -1706,6 +2702,12 @@ export async function handleAdminMailboxPoolsPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/mailbox-pools/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid mailbox pool id", 400);
 
@@ -1760,6 +2762,12 @@ export async function handleAdminMailboxPoolsDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/mailbox-pools/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid mailbox pool id", 400);
 
@@ -1799,6 +2807,12 @@ export async function handleAdminRulesPost(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
@@ -1825,6 +2839,12 @@ export async function handleAdminRulesPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/rules/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid rule id", 400);
 
@@ -1855,6 +2875,12 @@ export async function handleAdminRulesDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/rules/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid rule id", 400);
   await deleteRule(db, id);
@@ -1910,6 +2936,12 @@ export async function handleAdminWhitelistPost(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
@@ -1932,6 +2964,12 @@ export async function handleAdminWhitelistPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/whitelist/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid whitelist id", 400);
 
@@ -1957,6 +2995,12 @@ export async function handleAdminWhitelistDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/whitelist/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid whitelist id", 400);
   await deleteWhitelistEntry(db, id);
@@ -1981,6 +3025,12 @@ export async function handleAdminWhitelistSettingsPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<{ enabled?: boolean }>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
   const enabled = parsed.data?.enabled !== false;
@@ -2020,8 +3070,12 @@ export async function handleAdminMailboxesSync(
   env: WorkerEnv,
   actor?: AuthSession,
 ): Promise<Response> {
-  if (actor && isActorProjectScoped(actor)) {
-    return jsonError("project-scoped admin cannot run mailbox sync", 403);
+  if (actor) {
+    try {
+      ensureActorCanManageGlobalSettings(actor);
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+    }
   }
   const configuredDomains = await getDomainPool(db, env, actor);
   const observed = await getObservedMailboxStats(db, configuredDomains);
@@ -2115,6 +3169,12 @@ export async function handleAdminMailboxesPost(
   env: WorkerEnv,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
@@ -2134,20 +3194,24 @@ export async function handleAdminMailboxesPost(
     );
   }
 
-  const defaultDomain = await getDefaultMailboxDomain(db, env, actor, workspaceScope.data);
+  const mailboxDomainOptions: DomainPoolOptions = { allowMailboxCreationOnly: true };
+  const defaultDomain = await getDefaultMailboxDomain(db, env, actor, workspaceScope.data, mailboxDomainOptions);
 
   const validation = validateMailboxBody(
     parsed.data || {},
     defaultDomain,
   );
   if (!validation.ok) return jsonError(validation.error, 400);
-  const domainPool = new Set(await getDomainPool(db, env, actor, workspaceScope.data));
+  const domainPool = new Set(await getDomainPool(db, env, actor, workspaceScope.data, mailboxDomainOptions));
   if (
     domainPool.size > 0
     && validation.data.some(item => !domainPool.has(normalizeEmailAddress(item.address).split("@")[1] || ""))
   ) {
     return jsonError("domain is not configured", 400);
   }
+
+  const resolvedRetention = await resolveRetentionPolicyConfig(db, workspaceScope.data);
+  const mailboxExpiryNow = Date.now();
 
   for (const mailbox of validation.data) {
     const mailboxDomain = normalizeEmailAddress(mailbox.address).split("@")[1] || "";
@@ -2180,6 +3244,11 @@ export async function handleAdminMailboxesPost(
       ...mailbox,
       ...workspaceScope.data,
       created_by: actor.username,
+      expires_at: resolveMailboxExpirationTimestamp(
+        mailbox.expires_at,
+        resolvedRetention,
+        mailboxExpiryNow,
+      ),
     });
     await backfillMailboxWorkspaceScope(db, createdMailbox, [
       createdMailbox.address,
@@ -2210,6 +3279,12 @@ export async function handleAdminMailboxesPut(
   env: WorkerEnv,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/mailboxes/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid mailbox id", 400);
   const existing = await getMailboxById(db, id, getActorProjectIds(actor));
@@ -2235,7 +3310,8 @@ export async function handleAdminMailboxesPut(
     );
   }
 
-  const defaultDomain = await getDefaultMailboxDomain(db, env, actor, workspaceScope.data);
+  const mailboxDomainOptions: DomainPoolOptions = { allowMailboxCreationOnly: true };
+  const defaultDomain = await getDefaultMailboxDomain(db, env, actor, workspaceScope.data, mailboxDomainOptions);
 
   const validation = validateMailboxBody(
     parsed.data || {},
@@ -2243,10 +3319,14 @@ export async function handleAdminMailboxesPut(
     false,
   );
   if (!validation.ok) return jsonError(validation.error, 400);
-  const domainPool = new Set(await getDomainPool(db, env, actor, workspaceScope.data));
+  const domainPool = new Set(await getDomainPool(db, env, actor, workspaceScope.data, mailboxDomainOptions));
   if (
     domainPool.size > 0
-    && validation.data.some(item => !domainPool.has(normalizeEmailAddress(item.address).split("@")[1] || ""))
+    && validation.data.some(item => {
+      const nextDomain = normalizeEmailAddress(item.address).split("@")[1] || "";
+      const existingDomain = normalizeEmailAddress(existing.address).split("@")[1] || "";
+      return nextDomain !== existingDomain && !domainPool.has(nextDomain);
+    })
   ) {
     return jsonError("domain is not configured", 400);
   }
@@ -2323,6 +3403,12 @@ export async function handleAdminMailboxesDelete(
   env: WorkerEnv,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/mailboxes/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid mailbox id", 400);
   const existing = await getMailboxById(db, id, getActorProjectIds(actor));
@@ -2368,9 +3454,46 @@ export async function handleAdminMailboxesDelete(
 export async function handleAdminAdminsGet(
   url: URL,
   db: D1Database,
+  actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageAdmins(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
   const page = clampPage(url.searchParams.get("page"));
-  const payload = await getAdminUsersPaged(db, page, ADMIN_PAGE_SIZE);
+  const keyword = normalizeNullable(url.searchParams.get("keyword"));
+  const accessScopeValue = normalizeNullable(url.searchParams.get("access_scope"));
+  const roleValue = normalizeNullable(url.searchParams.get("role"));
+  const projectIdRaw = url.searchParams.get("project_id");
+  const project_id = parseOptionalId(projectIdRaw);
+
+  if (accessScopeValue && !ACCESS_SCOPE_SET.has(accessScopeValue)) {
+    return jsonError("invalid access_scope", 400);
+  }
+  if (projectIdRaw !== null && projectIdRaw !== "" && project_id === null) {
+    return jsonError("invalid project_id", 400);
+  }
+
+  const access_scope = (accessScopeValue || null) as AccessScope | null;
+  const role = roleValue ? normalizeAdminRole(roleValue, access_scope || "all") : null;
+  if (roleValue && !role) {
+    return jsonError("invalid role", 400);
+  }
+
+  const payload = await getAdminUsersPaged(
+    db,
+    page,
+    ADMIN_PAGE_SIZE,
+    {
+      access_scope,
+      is_enabled: maybeBoolean(url.searchParams.get("is_enabled")),
+      keyword,
+      project_id,
+      role: role as AdminRole | null,
+    },
+    getScopedProjectIds(actor),
+  );
   return json(payload);
 }
 
@@ -2379,10 +3502,16 @@ export async function handleAdminAdminsPost(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageAdmins(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
-  const validation = await validateAdminBody(parsed.data || {}, true);
+  const validation = await validateAdminBody(parsed.data || {}, true, actor);
   if (!validation.ok) return jsonError(validation.error, 400);
   if (
     !("username" in validation.data) ||
@@ -2391,11 +3520,17 @@ export async function handleAdminAdminsPost(
   ) {
     return jsonError("password is required", 400);
   }
+  try {
+    ensureActorCanAssignAdminRole(actor, validation.data.role, validation.data.access_scope);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
 
   const createData = validation.data as {
     access_scope: AccessScope;
     display_name: string;
     is_enabled: boolean;
+    note: string;
     password_hash: string;
     password_salt: string;
     project_ids: number[];
@@ -2424,6 +3559,7 @@ export async function handleAdminAdminsPost(
       access_scope: createData.access_scope,
       display_name: createData.display_name,
       is_enabled: createData.is_enabled,
+      note: createData.note,
       password_hash: createData.password_hash,
       password_salt: createData.password_salt,
       project_ids: createData.project_ids,
@@ -2454,7 +3590,17 @@ export async function handleAdminAdminsPost(
   await addAuditLog(db, {
     action: "admin.create",
     actor,
-    detail: toAuditDetail(user),
+    detail: toAuditDetail(
+      toAdminAuditSnapshot({
+        access_scope: user.access_scope,
+        display_name: user.display_name,
+        is_enabled: user.is_enabled,
+        note: user.note,
+        project_ids: user.projects.map(project => project.id),
+        role: user.role,
+        username: user.username,
+      }),
+    ),
     entity_id: user.id,
     entity_type: "admin_user",
   });
@@ -2467,24 +3613,79 @@ export async function handleAdminAdminsPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageAdmins(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = pathname.replace("/admin/admins/", "").trim();
   if (!id) return jsonError("invalid admin id", 400);
+
+  const existing = await getAdminAccessContext(db, id);
+  if (!existing) return jsonError("admin user not found", 404);
 
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
-  const validation = await validateAdminBody(parsed.data || {}, false);
+  const validation = await validateAdminBody(parsed.data || {}, false, actor);
   if (!validation.ok) return jsonError(validation.error, 400);
+  try {
+    ensureActorCanManageAdminRecord(actor, existing);
+    ensureActorCanAssignAdminRole(actor, validation.data.role, validation.data.access_scope);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const previous = toAdminAuditSnapshot({
+    access_scope: existing.access_scope,
+    display_name: existing.display_name,
+    is_enabled: existing.is_enabled,
+    note: existing.note,
+    project_ids: existing.project_ids,
+    role: existing.role,
+    username: existing.username,
+  });
+  const next = toAdminAuditSnapshot({
+    access_scope: validation.data.access_scope,
+    display_name: validation.data.display_name,
+    is_enabled: validation.data.is_enabled,
+    note: validation.data.note,
+    project_ids: validation.data.project_ids,
+    role: validation.data.role,
+    username: existing.username,
+  });
 
   await updateAdminUser(db, id, validation.data);
   await addAuditLog(db, {
     action: "admin.update",
     actor,
-    detail: { id, ...parsed.data },
+    detail: buildAdminUpdateAuditDetail(previous, next),
     entity_id: id,
     entity_type: "admin_user",
   });
   return json({ ok: true });
+}
+
+function parseNotificationDeliveryIds(input: Record<string, unknown>): { data: number[]; ok: true } | {
+  error: string;
+  ok: false;
+} {
+  const ids = Array.isArray(input.delivery_ids) ? input.delivery_ids : [];
+  const normalizedIds = Array.from(
+    new Set(
+      ids
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value) && value > 0)
+        .map(value => Math.floor(value)),
+    ),
+  );
+
+  if (normalizedIds.length === 0) {
+    return { error: "delivery_ids must contain at least one valid id", ok: false };
+  }
+
+  return { data: normalizedIds, ok: true };
 }
 
 export async function handleAdminNotificationsGet(
@@ -2522,7 +3723,42 @@ export async function handleAdminNotificationDeliveriesGet(
   }
 
   const page = clampPage(url.searchParams.get("page"));
-  return json(await getNotificationDeliveriesPaged(db, page, ADMIN_PAGE_SIZE, id));
+  const deadLetterOnly =
+    url.searchParams.get("dead_letter_only") === "1"
+    || url.searchParams.get("dead_letter_only") === "true";
+  return json(
+    await getNotificationDeliveriesPaged(db, page, ADMIN_PAGE_SIZE, id, {
+      dead_letter_only: deadLetterOnly,
+    }),
+  );
+}
+
+export async function handleAdminNotificationDeliveryAttemptsGet(
+  pathname: string,
+  url: URL,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  const match = pathname.match(/^\/admin\/notifications\/deliveries\/(\d+)\/attempts$/);
+  const deliveryId = Number(match?.[1] || 0);
+  if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
+    return jsonError("invalid notification delivery id", 400);
+  }
+
+  const delivery = await getNotificationDeliveryById(db, deliveryId);
+  if (!delivery) return jsonError("notification delivery not found", 404);
+
+  const endpoint = await getNotificationEndpointById(db, delivery.notification_endpoint_id);
+  if (!endpoint) return jsonError("notification endpoint not found", 404);
+  try {
+    if (endpoint.access_scope === "all") ensureActorCanAccessProject(actor, null);
+    else ensureActorCanAccessAnyProject(actor, endpoint.projects.map(project => project.id));
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "project access denied", 403);
+  }
+
+  const page = clampPage(url.searchParams.get("page"));
+  return json(await getNotificationDeliveryAttemptsPaged(db, page, ADMIN_PAGE_SIZE, deliveryId));
 }
 
 export async function handleAdminNotificationsPost(
@@ -2530,6 +3766,12 @@ export async function handleAdminNotificationsPost(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
@@ -2540,7 +3782,7 @@ export async function handleAdminNotificationsPost(
   await addAuditLog(db, {
     action: "notification.create",
     actor,
-    detail: { id, ...validation.data },
+    detail: { id, ...validation.data } as unknown as JsonValue,
     entity_id: String(id),
     entity_type: "notification_endpoint",
   });
@@ -2553,6 +3795,12 @@ export async function handleAdminNotificationsPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/notifications/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid notification id", 400);
 
@@ -2578,7 +3826,7 @@ export async function handleAdminNotificationsPut(
   await addAuditLog(db, {
     action: "notification.update",
     actor,
-    detail: { id, ...validation.data },
+    detail: { id, ...validation.data } as unknown as JsonValue,
     entity_id: String(id),
     entity_type: "notification_endpoint",
   });
@@ -2590,6 +3838,12 @@ export async function handleAdminNotificationsDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/notifications/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid notification id", 400);
   const existing = await getNotificationEndpointById(db, id);
@@ -2619,6 +3873,12 @@ export async function handleAdminNotificationsTest(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(
     pathname.replace("/admin/notifications/", "").replace("/test", ""),
   );
@@ -2643,6 +3903,12 @@ export async function handleAdminNotificationDeliveryRetry(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const match = pathname.match(/^\/admin\/notifications\/deliveries\/(\d+)\/retry$/);
   const deliveryId = Number(match?.[1] || 0);
   if (!Number.isFinite(deliveryId) || deliveryId <= 0) return jsonError("invalid notification delivery id", 400);
@@ -2662,6 +3928,10 @@ export async function handleAdminNotificationDeliveryRetry(
   const delivery = await retryNotificationDelivery(db, deliveryId);
   if (!delivery) return jsonError("notification delivery not found", 404);
 
+  if (sourceDelivery.is_dead_letter) {
+    await resolveNotificationDeliveryDeadLetter(db, sourceDelivery.id, actor.username);
+  }
+
   await addAuditLog(db, {
     action: "notification.delivery.retry",
     actor,
@@ -2678,11 +3948,233 @@ export async function handleAdminNotificationDeliveryRetry(
   return json({ delivery, ok: true });
 }
 
+export async function handleAdminNotificationDeliveryResolve(
+  pathname: string,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const match = pathname.match(/^\/admin\/notifications\/deliveries\/(\d+)\/resolve$/);
+  const deliveryId = Number(match?.[1] || 0);
+  if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
+    return jsonError("invalid notification delivery id", 400);
+  }
+
+  const delivery = await getNotificationDeliveryById(db, deliveryId);
+  if (!delivery) return jsonError("notification delivery not found", 404);
+
+  const endpoint = await getNotificationEndpointById(db, delivery.notification_endpoint_id);
+  if (!endpoint) return jsonError("notification endpoint not found", 404);
+  try {
+    if (endpoint.access_scope === "all") ensureActorCanAccessProject(actor, null);
+    else ensureActorCanAccessAnyProject(actor, endpoint.projects.map(project => project.id));
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "project access denied", 403);
+  }
+
+  if (!delivery.is_dead_letter) {
+    return jsonError("notification delivery is not in dead letter queue", 409);
+  }
+
+  await resolveNotificationDeliveryDeadLetter(db, delivery.id, actor.username);
+  await addAuditLog(db, {
+    action: "notification.delivery.resolve",
+    actor,
+    detail: {
+      delivery_id: delivery.id,
+      event: delivery.event,
+      notification_endpoint_id: delivery.notification_endpoint_id,
+    },
+    entity_id: String(delivery.id),
+    entity_type: "notification_delivery",
+  });
+  return json({ ok: true });
+}
+
+export async function handleAdminNotificationDeliveryBulkRetry(
+  request: Request,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const parsed = await readJsonBody<Record<string, unknown>>(request);
+  if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+
+  const validation = parseNotificationDeliveryIds(parsed.data || {});
+  if (!validation.ok) return jsonError(validation.error, 400);
+
+  const status_breakdown = {
+    failed: 0,
+    pending: 0,
+    retrying: 0,
+    success: 0,
+  } as Record<"failed" | "pending" | "retrying" | "success", number>;
+  const errors: Array<{ delivery_id: number; message: string }> = [];
+  let success_count = 0;
+
+  for (const deliveryId of validation.data) {
+    try {
+      const sourceDelivery = await getNotificationDeliveryById(db, deliveryId);
+      if (!sourceDelivery) {
+        errors.push({ delivery_id: deliveryId, message: "notification delivery not found" });
+        continue;
+      }
+
+      const endpoint = await getNotificationEndpointById(db, sourceDelivery.notification_endpoint_id);
+      if (!endpoint) {
+        errors.push({ delivery_id: deliveryId, message: "notification endpoint not found" });
+        continue;
+      }
+
+      if (endpoint.access_scope === "all") ensureActorCanAccessProject(actor, null);
+      else ensureActorCanAccessAnyProject(actor, endpoint.projects.map(project => project.id));
+
+      if (!sourceDelivery.is_dead_letter) {
+        errors.push({
+          delivery_id: deliveryId,
+          message: "notification delivery is not in dead letter queue",
+        });
+        continue;
+      }
+
+      const delivery = await retryNotificationDelivery(db, deliveryId);
+      if (!delivery) {
+        errors.push({ delivery_id: deliveryId, message: "notification delivery not found" });
+        continue;
+      }
+
+      await resolveNotificationDeliveryDeadLetter(db, sourceDelivery.id, actor.username);
+      status_breakdown[delivery.status] += 1;
+      success_count += 1;
+    } catch (error) {
+      errors.push({
+        delivery_id: deliveryId,
+        message: error instanceof Error ? error.message : "notification delivery retry failed",
+      });
+    }
+  }
+
+  await addAuditLog(db, {
+    action: "notification.delivery.bulk_retry",
+    actor,
+    detail: {
+      delivery_ids: validation.data,
+      failed_count: errors.length,
+      requested_count: validation.data.length,
+      status_breakdown,
+      success_count,
+    },
+    entity_id: "",
+    entity_type: "notification_delivery",
+  });
+
+  return json({
+    errors,
+    failed_count: errors.length,
+    ok: true,
+    requested_count: validation.data.length,
+    status_breakdown,
+    success_count,
+  });
+}
+
+export async function handleAdminNotificationDeliveryBulkResolve(
+  request: Request,
+  db: D1Database,
+  actor: AuthSession,
+): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
+  const parsed = await readJsonBody<Record<string, unknown>>(request);
+  if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+
+  const validation = parseNotificationDeliveryIds(parsed.data || {});
+  if (!validation.ok) return jsonError(validation.error, 400);
+
+  const errors: Array<{ delivery_id: number; message: string }> = [];
+  let success_count = 0;
+
+  for (const deliveryId of validation.data) {
+    try {
+      const delivery = await getNotificationDeliveryById(db, deliveryId);
+      if (!delivery) {
+        errors.push({ delivery_id: deliveryId, message: "notification delivery not found" });
+        continue;
+      }
+
+      const endpoint = await getNotificationEndpointById(db, delivery.notification_endpoint_id);
+      if (!endpoint) {
+        errors.push({ delivery_id: deliveryId, message: "notification endpoint not found" });
+        continue;
+      }
+
+      if (endpoint.access_scope === "all") ensureActorCanAccessProject(actor, null);
+      else ensureActorCanAccessAnyProject(actor, endpoint.projects.map(project => project.id));
+
+      if (!delivery.is_dead_letter) {
+        errors.push({
+          delivery_id: deliveryId,
+          message: "notification delivery is not in dead letter queue",
+        });
+        continue;
+      }
+
+      await resolveNotificationDeliveryDeadLetter(db, delivery.id, actor.username);
+      success_count += 1;
+    } catch (error) {
+      errors.push({
+        delivery_id: deliveryId,
+        message: error instanceof Error ? error.message : "notification delivery resolve failed",
+      });
+    }
+  }
+
+  await addAuditLog(db, {
+    action: "notification.delivery.bulk_resolve",
+    actor,
+    detail: {
+      delivery_ids: validation.data,
+      failed_count: errors.length,
+      requested_count: validation.data.length,
+      success_count,
+    },
+    entity_id: "",
+    entity_type: "notification_delivery",
+  });
+
+  return json({
+    errors,
+    failed_count: errors.length,
+    ok: true,
+    requested_count: validation.data.length,
+    success_count,
+  });
+}
+
 export async function handleAdminApiTokensGet(
   url: URL,
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
   const page = clampPage(url.searchParams.get("page"));
   return json(
     await getApiTokensPaged(db, page, ADMIN_PAGE_SIZE, getActorProjectIds(actor)),
@@ -2694,6 +4186,12 @@ export async function handleAdminApiTokensPost(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
@@ -2730,6 +4228,12 @@ export async function handleAdminApiTokensPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = pathname.replace("/admin/api-tokens/", "").trim();
   if (!id) return jsonError("invalid api token id", 400);
 
@@ -2767,6 +4271,12 @@ export async function handleAdminApiTokensDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = pathname.replace("/admin/api-tokens/", "").trim();
   if (!id) return jsonError("invalid api token id", 400);
 
@@ -2806,6 +4316,12 @@ export async function handleAdminOutboundSettingsPut(
   env: WorkerEnv,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
@@ -2877,6 +4393,12 @@ export async function handleAdminOutboundEmailsPost(
   env: WorkerEnv,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
 
@@ -2919,6 +4441,12 @@ export async function handleAdminOutboundEmailsPut(
   env: WorkerEnv,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(
     pathname.replace("/admin/outbound/emails/", "").split("/")[0] || "",
   );
@@ -2973,6 +4501,12 @@ export async function handleAdminOutboundEmailSendExisting(
   env: WorkerEnv,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(
     pathname.replace("/admin/outbound/emails/", "").replace("/send", ""),
   );
@@ -3032,6 +4566,12 @@ export async function handleAdminOutboundEmailsDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/outbound/emails/", ""));
   if (!Number.isFinite(id)) return jsonError("invalid outbound email id", 400);
   await deleteOutboundEmailRecord(db, id);
@@ -3056,6 +4596,12 @@ export async function handleAdminOutboundTemplatesPost(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
   const validation = validateOutboundTemplateInput(parsed.data || {});
@@ -3080,6 +4626,12 @@ export async function handleAdminOutboundTemplatesPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/outbound/templates/", ""));
   if (!Number.isFinite(id))
     return jsonError("invalid outbound template id", 400);
@@ -3104,6 +4656,12 @@ export async function handleAdminOutboundTemplatesDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/outbound/templates/", ""));
   if (!Number.isFinite(id))
     return jsonError("invalid outbound template id", 400);
@@ -3129,6 +4687,12 @@ export async function handleAdminOutboundContactsPost(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
   const validation = validateOutboundContactInput(parsed.data || {});
@@ -3150,6 +4714,12 @@ export async function handleAdminOutboundContactsPut(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/outbound/contacts/", ""));
   if (!Number.isFinite(id))
     return jsonError("invalid outbound contact id", 400);
@@ -3174,6 +4744,12 @@ export async function handleAdminOutboundContactsDelete(
   db: D1Database,
   actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanWrite(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
+
   const id = Number(pathname.replace("/admin/outbound/contacts/", ""));
   if (!Number.isFinite(id))
     return jsonError("invalid outbound contact id", 400);
@@ -3319,15 +4895,33 @@ export async function handleAdminOverviewStats(
 export async function handleAdminAuditLogs(
   url: URL,
   db: D1Database,
+  actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
   const page = clampPage(url.searchParams.get("page"));
-  return json(await getAuditLogsPaged(db, page, AUDIT_PAGE_SIZE));
+  return json(await getAuditLogsPaged(db, page, AUDIT_PAGE_SIZE, {
+    action: normalizeNullable(url.searchParams.get("action")),
+    action_prefix: normalizeNullable(url.searchParams.get("action_prefix")),
+    entity_id: normalizeNullable(url.searchParams.get("entity_id")),
+    entity_type: normalizeNullable(url.searchParams.get("entity_type")),
+    keyword: normalizeNullable(url.searchParams.get("keyword")),
+  }));
 }
 
 export async function handleAdminErrors(
   url: URL,
   db: D1Database,
+  actor: AuthSession,
 ): Promise<Response> {
+  try {
+    ensureActorCanManageGlobalSettings(actor);
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "permission denied", 403);
+  }
   const page = clampPage(url.searchParams.get("page"));
   return json(
     await getErrorEventsPaged(db, page, AUDIT_PAGE_SIZE, {
@@ -3539,7 +5133,74 @@ function validateWhitelistBody(body: Record<string, unknown>) {
   };
 }
 
+function validateDomainRoutingProfileBody(body: Record<string, unknown>) {
+  const name = String(body.name || "").trim();
+  const slug = slugifyIdentifier(
+    body.slug || body.name || "routing-profile",
+    "routing-profile",
+  ).slice(0, MAX_WORKSPACE_SLUG_LENGTH);
+  const catch_all_mode = String(body.catch_all_mode || "inherit").trim().toLowerCase() as CatchAllMode;
+  const catch_all_forward_to = normalizeEmailAddress(body.catch_all_forward_to);
+  const provider = String(body.provider || "cloudflare").trim().toLowerCase();
+  const note = String(body.note || "").trim();
+  const project_id = parseOptionalId(body.project_id);
+  const environment_id = parseOptionalId(body.environment_id);
+  const is_enabled = body.is_enabled !== false;
+
+  if (!name) return { ok: false as const, error: "name is required" };
+  if (name.length > MAX_WORKSPACE_NAME_LENGTH) {
+    return { ok: false as const, error: "name is too long" };
+  }
+  if (!slug) return { ok: false as const, error: "slug is required" };
+  if (slug.length > MAX_WORKSPACE_SLUG_LENGTH) {
+    return { ok: false as const, error: "slug is too long" };
+  }
+  if (!provider) return { ok: false as const, error: "provider is required" };
+  const providerDefinition = getDomainProviderDefinition(provider);
+  if (!providerDefinition) return { ok: false as const, error: "provider is not supported" };
+  if (!domainProviderSupports(providerDefinition, "routing_profile")) {
+    return {
+      ok: false as const,
+      error: `${providerDefinition.label} does not support routing profiles`,
+    };
+  }
+  if (!["inherit", "enabled", "disabled"].includes(catch_all_mode)) {
+    return { ok: false as const, error: "invalid catch_all_mode" };
+  }
+  if (catch_all_forward_to.length > 320) {
+    return { ok: false as const, error: "catch_all_forward_to is too long" };
+  }
+  if (catch_all_forward_to && !isValidEmailAddress(catch_all_forward_to)) {
+    return { ok: false as const, error: "catch_all_forward_to must be a valid email address" };
+  }
+  if (catch_all_mode === "enabled" && !catch_all_forward_to) {
+    return { ok: false as const, error: "catch_all_forward_to is required when catch_all_mode is enabled" };
+  }
+  if (note.length > MAX_WORKSPACE_DESCRIPTION_LENGTH) {
+    return { ok: false as const, error: "note is too long" };
+  }
+
+  return {
+    ok: true as const,
+    data: {
+      catch_all_forward_to,
+      catch_all_mode,
+      is_enabled,
+      name,
+      note,
+      provider,
+      slug,
+    },
+    scope: {
+      environment_id,
+      project_id,
+    },
+  };
+}
+
 function validateDomainAssetBody(body: Record<string, unknown>) {
+  const allow_new_mailboxes = body.allow_new_mailboxes !== false;
+  const allow_mailbox_route_sync = body.allow_mailbox_route_sync !== false;
   const catch_all_mode = String(body.catch_all_mode || "inherit").trim().toLowerCase() as CatchAllMode;
   const catch_all_forward_to = normalizeEmailAddress(body.catch_all_forward_to);
   const domain = normalizeDomainValue(body.domain);
@@ -3549,6 +5210,7 @@ function validateDomainAssetBody(body: Record<string, unknown>) {
   const note = String(body.note || "").trim();
   const project_id = parseOptionalId(body.project_id);
   const environment_id = parseOptionalId(body.environment_id);
+  const routing_profile_id = parseOptionalId(body.routing_profile_id);
   const is_enabled = body.is_enabled !== false;
   const is_primary = body.is_primary === true;
 
@@ -3556,7 +5218,8 @@ function validateDomainAssetBody(body: Record<string, unknown>) {
   if (domain.length > DOMAIN_MAX_LENGTH) return { ok: false as const, error: "domain is too long" };
   if (!isValidDomainValue(domain)) return { ok: false as const, error: "domain is invalid" };
   if (!provider) return { ok: false as const, error: "provider is required" };
-  if (provider !== "cloudflare") return { ok: false as const, error: "only cloudflare provider is supported" };
+  const providerDefinition = getDomainProviderDefinition(provider);
+  if (!providerDefinition) return { ok: false as const, error: "provider is not supported" };
   if (!["inherit", "enabled", "disabled"].includes(catch_all_mode)) {
     return { ok: false as const, error: "invalid catch_all_mode" };
   }
@@ -3568,14 +5231,36 @@ function validateDomainAssetBody(body: Record<string, unknown>) {
   if (catch_all_forward_to && !isValidEmailAddress(catch_all_forward_to)) {
     return { ok: false as const, error: "catch_all_forward_to must be a valid email address" };
   }
+  if (!domainProviderSupports(providerDefinition, "zone_id") && zone_id) {
+    return { ok: false as const, error: `${providerDefinition.label} does not support zone_id` };
+  }
+  if (!domainProviderSupports(providerDefinition, "email_worker") && email_worker) {
+    return { ok: false as const, error: `${providerDefinition.label} does not support email_worker` };
+  }
+  if (!domainProviderSupports(providerDefinition, "catch_all_policy")) {
+    if (catch_all_mode !== "inherit" || catch_all_forward_to) {
+      return {
+        ok: false as const,
+        error: `${providerDefinition.label} does not support catch-all policy management`,
+      };
+    }
+  }
   if (catch_all_mode === "enabled" && !catch_all_forward_to) {
     return { ok: false as const, error: "catch_all_forward_to is required when catch_all_mode is enabled" };
+  }
+  if (routing_profile_id && !domainProviderSupports(providerDefinition, "routing_profile")) {
+    return {
+      ok: false as const,
+      error: `${providerDefinition.label} does not support routing profiles`,
+    };
   }
   if (note.length > MAX_WORKSPACE_DESCRIPTION_LENGTH) return { ok: false as const, error: "note is too long" };
 
   return {
     ok: true as const,
     data: {
+      allow_mailbox_route_sync,
+      allow_new_mailboxes,
       catch_all_forward_to,
       catch_all_mode,
       domain,
@@ -3584,6 +5269,7 @@ function validateDomainAssetBody(body: Record<string, unknown>) {
       is_primary,
       note,
       provider,
+      routing_profile_id,
       zone_id,
     },
     scope: {
@@ -3688,27 +5374,42 @@ function validateMailboxBody(
 async function validateAdminBody(
   body: Record<string, unknown>,
   isCreate: boolean,
+  actor: AuthSession | null,
 ) {
   const username = String(body.username || "")
     .trim()
     .toLowerCase();
   const display_name = String(body.display_name || "").trim();
-  const role = String(body.role || "analyst") as AdminRole;
+  const note = String(body.note || "").trim();
   const password = String(body.password || "");
   const is_enabled = body.is_enabled !== false;
-  const scopeValidation = validateAccessScopeInput(body, null, {
-    allowGlobalScope: true,
+  const scopeValidation = validateAccessScopeInput(body, actor, {
+    allowGlobalScope: !actor || !isActorProjectScoped(actor),
   });
 
   if (isCreate && !username)
     return { ok: false as const, error: "username is required" };
   if (!display_name)
     return { ok: false as const, error: "display_name is required" };
-  if (!["owner", "admin", "analyst"].includes(role))
-    return { ok: false as const, error: "invalid role" };
+  if (note.length > MAX_WORKSPACE_DESCRIPTION_LENGTH) {
+    return { ok: false as const, error: "note is too long" };
+  }
   if (!scopeValidation.ok) return scopeValidation;
-  if (role === "owner" && scopeValidation.data.access_scope !== "all") {
-    return { ok: false as const, error: "owner must keep global scope" };
+  const role = normalizeAdminRole(body.role ? String(body.role) : "viewer", scopeValidation.data.access_scope);
+  if (!role) {
+    return { ok: false as const, error: "invalid role" };
+  }
+  if (requiresGlobalAdminScope(role, scopeValidation.data.access_scope) && scopeValidation.data.access_scope !== "all") {
+    return { ok: false as const, error: "platform_admin and owner must keep global scope" };
+  }
+  if (requiresBoundAdminScope(role, scopeValidation.data.access_scope) && scopeValidation.data.access_scope !== "bound") {
+    return { ok: false as const, error: "project_admin must use bound access_scope" };
+  }
+  if (actor && isActorProjectScoped(actor) && !["project_admin", "operator", "viewer"].includes(role)) {
+    return {
+      ok: false as const,
+      error: "project-scoped admin can only manage project_admin, operator, or viewer roles",
+    };
   }
 
   if (password) {
@@ -3725,6 +5426,7 @@ async function validateAdminBody(
         access_scope: scopeValidation.data.access_scope,
         display_name,
         is_enabled,
+        note,
         password_hash: hash,
         password_salt: salt,
         project_ids: scopeValidation.data.project_ids,
@@ -3742,6 +5444,7 @@ async function validateAdminBody(
       access_scope: scopeValidation.data.access_scope,
       display_name,
       is_enabled,
+      note,
       project_ids: scopeValidation.data.project_ids,
       role,
     },
@@ -3766,6 +5469,15 @@ function validateNotificationBody(
         .split(/[,\n]/)
         .map((item) => item.trim())
         .filter(Boolean);
+  const normalizedEvents = normalizeNotificationEventValues(events);
+  const alert_config = normalizeNotificationAlertConfig(
+    safeParseJson<Record<string, unknown>>(
+      typeof body.alert_config === "string"
+        ? body.alert_config
+        : JSON.stringify(body.alert_config || {}),
+      {},
+    ) || {},
+  );
 
   if (!name) return { ok: false as const, error: "name is required" };
   if (type !== "webhook")
@@ -3778,12 +5490,12 @@ function validateNotificationBody(
   if (!scopeValidation.ok) return scopeValidation;
   if (events.length === 0)
     return { ok: false as const, error: "at least one event is required" };
-  if (
-    events.some((event) => event !== "*" && !NOTIFICATION_EVENT_SET.has(event))
-  ) {
+  if (normalizedEvents.values.length === 0)
+    return { ok: false as const, error: "at least one valid event is required" };
+  if (normalizedEvents.invalid.length > 0) {
     return {
       ok: false as const,
-      error: "unknown event in notification events",
+      error: `unknown event in notification events: ${normalizedEvents.invalid.join(", ")}`,
     };
   }
 
@@ -3791,7 +5503,8 @@ function validateNotificationBody(
     ok: true as const,
     data: {
       access_scope: scopeValidation.data.access_scope,
-      events,
+      alert_config,
+      events: normalizedEvents.values,
       is_enabled,
       name,
       project_ids: scopeValidation.data.project_ids,
@@ -3890,6 +5603,89 @@ function parseProjectIdsInput(value: unknown): number[] {
       parsed.filter((item): item is number => item !== null && Number.isFinite(item) && item > 0),
     ),
   );
+}
+
+function parseNullableHours(value: unknown, field: string) {
+  if (value === null || value === undefined || value === "") {
+    return { ok: true as const, value: null };
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return { ok: false as const, error: `${field} must be a positive integer` };
+  }
+  if (parsed > MAX_RETENTION_HOURS) {
+    return { ok: false as const, error: `${field} is too large` };
+  }
+
+  return { ok: true as const, value: parsed };
+}
+
+function validateRetentionPolicyBody(body: Record<string, unknown>) {
+  const name = String(body.name || "").trim();
+  const description = String(body.description || "").trim();
+  const is_enabled = body.is_enabled !== false;
+  const project_id = parseOptionalId(body.project_id);
+  const environment_id = parseOptionalId(body.environment_id);
+  const mailbox_pool_id = parseOptionalId(body.mailbox_pool_id);
+  const archiveEmail = parseNullableHours(body.archive_email_hours, "archive_email_hours");
+  const mailboxTtl = parseNullableHours(body.mailbox_ttl_hours, "mailbox_ttl_hours");
+  const emailRetention = parseNullableHours(body.email_retention_hours, "email_retention_hours");
+  const deletedEmailRetention = parseNullableHours(
+    body.deleted_email_retention_hours,
+    "deleted_email_retention_hours",
+  );
+
+  if (!name) return { ok: false as const, error: "name is required" };
+  if (name.length > MAX_WORKSPACE_NAME_LENGTH) {
+    return { ok: false as const, error: "name is too long" };
+  }
+  if (description.length > MAX_WORKSPACE_DESCRIPTION_LENGTH) {
+    return { ok: false as const, error: "description is too long" };
+  }
+  if (!archiveEmail.ok) return { ok: false as const, error: archiveEmail.error };
+  if (!mailboxTtl.ok) return { ok: false as const, error: mailboxTtl.error };
+  if (!emailRetention.ok) return { ok: false as const, error: emailRetention.error };
+  if (!deletedEmailRetention.ok) {
+    return { ok: false as const, error: deletedEmailRetention.error };
+  }
+  if (
+    archiveEmail.value === null
+    && mailboxTtl.value === null
+    && emailRetention.value === null
+    && deletedEmailRetention.value === null
+  ) {
+    return {
+      ok: false as const,
+      error: "at least one retention setting is required",
+    };
+  }
+  if (
+    archiveEmail.value !== null
+    && emailRetention.value !== null
+    && archiveEmail.value >= emailRetention.value
+  ) {
+    return {
+      ok: false as const,
+      error: "archive_email_hours must be smaller than email_retention_hours",
+    };
+  }
+
+  return {
+    ok: true as const,
+    data: {
+      archive_email_hours: archiveEmail.value,
+      deleted_email_retention_hours: deletedEmailRetention.value,
+      description,
+      email_retention_hours: emailRetention.value,
+      environment_id,
+      is_enabled,
+      mailbox_pool_id,
+      mailbox_ttl_hours: mailboxTtl.value,
+      name,
+      project_id,
+    },
+  };
 }
 
 function validateAccessScopeInput(

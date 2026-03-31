@@ -627,6 +627,13 @@ export function parseDeletedFilter(
   return "exclude";
 }
 
+export function parseArchivedFilter(
+  value: string | null | undefined,
+): "exclude" | "include" | "only" {
+  if (value === "only" || value === "include") return value;
+  return "exclude";
+}
+
 export function base64ByteLength(base64Value: string): number {
   const normalized = String(base64Value || "");
   if (!normalized) return 0;

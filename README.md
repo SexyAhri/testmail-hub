@@ -1,8 +1,10 @@
 # TestMail Hub
 
-基于 `Cloudflare Workers + D1 + React + Vite + TypeScript + Ant Design` 构建的团队测试邮箱与验证码中台。
+> 面向测试团队、自动化团队和私有部署场景的邮件接收、验证码提取与邮箱资产治理控制台。
 
-它不是面向大众的“临时邮箱站”，而是一套更偏团队内部使用、自动化测试、私有部署和邮件资产治理的控制台，覆盖收件、提取、规则、白名单、项目隔离、Webhook、API Token、发信中心和系统日志。
+`Cloudflare Workers` `D1` `React 19` `TypeScript` `Ant Design` `GitHub Actions`
+
+TestMail Hub 不是面向大众的“临时邮箱站”，而是一套更偏企业内部使用的邮件验证与治理后台。它把收件、提取、规则、白名单、项目隔离、Webhook、API Token、生命周期策略、域名资产和发信中心整合到了一套控制台里，适合做团队测试邮箱与验证码中台。
 
 ## 项目定位
 
@@ -12,61 +14,116 @@
 - 私有部署邮件资产管理后台
 - 自动化测试邮件平台
 
-## 当前已实现的能力
+## 为什么做这个项目
 
-### 邮件接收与查看
+很多团队都遇到过同一类问题：
 
-- 完整存储邮件正文、头信息、附件元数据
-- 邮件详情页支持查看正文、规则命中、提取结果、附件下载
-- 支持单封删除、恢复、彻底删除
-- 支持标签、备注、验证码列展示与复制
-- 支持回收站页面
+- 自动化测试需要稳定接收注册、登录、验证、重置邮件
+- 验证码和登录链接散落在邮箱里，人工找很慢
+- 多项目、多环境测试流量混在一起，无法隔离
+- 邮箱、域名、路由、Webhook、Token 缺少统一治理入口
+- 私有部署和审计留痕要求越来越高
 
-### 验证码 / 链接提取
+TestMail Hub 的目标就是把这条链路收成一个可持续演进的平台：
+
+`接收邮件 -> 提取验证码/链接 -> 管理邮箱资产 -> 自动化接入 -> 团队治理与审计`
+
+## 适用场景
+
+- 自动化测试统一接收注册、登录、验证邮件
+- QA 团队批量管理测试邮箱和验证码流程
+- 多项目、多环境隔离邮件资产与通知事件
+- 用 API / Webhook 接入测试平台、CI 或内部系统
+- 私有部署团队搭建自己的测试邮件与验证码中台
+
+## 当前状态
+
+### 已经落地
+
+- 邮件接收、正文存储、附件元数据与详情查看
+- 验证码、登录链接、魔法链接、平台邮件识别
+- 规则中心、白名单、全局白名单开关
+- 多域名资产中心第一版
+- 项目 / 环境 / 邮箱池三层隔离
+- Project-scoped API Token / Webhook
+- 生命周期策略中心与执行记录
+- 成员中心、审计日志、系统错误日志
+- Resend 发信中心、模板、联系人、发送记录
+- GitHub Actions + Cloudflare Workers 持续部署链路
+
+### 还在继续增强
+
+- 验证码 / 链接提取准确率
+- 更细的资源级权限与团队治理
+- 更完整的多域名 provider 和域名治理规则
+- 生命周期归档、保留审计与更细粒度清理动作
+- 发信审批、队列化和更强的运维能力
+
+## 核心能力
+
+### 1. 邮件接收与查看
+
+- 完整存储邮件正文、头信息和附件元数据
+- 邮件详情页查看正文、规则命中、提取结果和附件
+- 支持删除、恢复、彻底删除、备注、标签和回收站
+- 列表直接展示验证码，并支持点击复制
+
+### 2. 验证码 / 链接提取
 
 - 提取常见数字验证码和数字字母混合验证码
 - 提取验证链接、登录链接、魔法链接、重置链接、邀请链接
 - 识别 GitHub、Google、Apple、PayPal、Steam、Discord、Microsoft、Amazon、Notion、Slack、OpenAI 等常见平台邮件
-- API 与 Webhook 可返回提取结果
+- API 与 Webhook 可直接返回提取结果
 
-### 规则与白名单
+### 3. 规则与白名单
 
 - 规则 CRUD 与规则测试器
 - 白名单 CRUD
 - 全局白名单开关
-- 更细化的常见平台识别规则
+- 常见平台识别规则增强
 
-### 邮箱资产与多域名
+### 4. 邮箱资产与多域名
 
 - 邮箱生成、启停、批量创建、到期控制
 - Cloudflare Email Routing 路由同步
-- 多域名资产管理
+- 多域名资产录入与管理
 - 域名与项目 / 环境绑定
 - 按工作空间过滤域名池与默认域名
 - Catch-all 策略管理与同步
 - 域名维度监控卡片、排行图表、接入概览
 
-### 项目 / 环境隔离
+### 5. 项目 / 环境隔离
 
 - 项目、环境、邮箱池三层模型
 - 邮件、邮箱、域名、Webhook、API Token 支持项目范围
 - 项目级管理员绑定
 - 工作空间目录接口与后台管理页面
 
-### 管理与治理
+### 6. 生命周期策略
+
+- retention 策略表与默认全局策略
+- 支持全局、项目、环境、邮箱池四级作用域继承
+- 新建邮箱可按策略自动补默认过期时间
+- 定时任务按策略清理普通邮件和已删除邮件
+- 后台可视化生命周期策略中心
+- 定时任务执行记录与失败留痕
+
+### 7. 管理与治理
 
 - 管理员登录与 Session
 - Bootstrap Token 登录
 - 管理员、项目绑定、访问范围控制
-- 审计日志
+- 成员中心支持关键词、角色、访问范围、项目、状态后端真筛选
+- 成员备注、最近变更摘要与成员页内最近变更记录
+- 审计日志支持按关键词、实体类型、动作域做服务端筛选
 - 系统错误日志中心
 
-### API 与自动化
+### 8. API 与自动化
 
 - 托管 API Token
 - Token 权限拆分
 - Project-scoped API Token
-- 公共 API：
+- 已提供公共 API：
   - `GET /api/emails/latest`
   - `GET /api/emails/latest/extraction`
   - `GET /api/emails/code`
@@ -74,78 +131,48 @@
   - `GET /api/emails/:messageId/extractions`
   - `GET /api/emails/:messageId/attachments/:attachmentId`
 
-### Webhook
+### 9. Webhook
 
 - 邮件接收、命中、验证码提取、链接提取等事件推送
 - Secret 签名
-- 投递记录
-- 自动重试
-- 手动重放
+- 投递记录、自动重试、手动重放
+- 死信治理、单条/批量重放、单条/批量忽略
+- 端点级告警规则：死信、重试、成功率、静默时长
 - Project-scoped Webhook
 
-### 发信中心
+### 10. 发信中心
 
 - Resend 接入
 - 发信设置可视化管理
 - 草稿、立即发送、计划发送
 - 发信记录、发送统计
-- 模板管理
-- 联系人管理
+- 模板管理、联系人管理
 - 外部收件人开关
 
-### 工程能力
+## 页面预览
 
-- 全仓统一 TypeScript
-- React + Vite 前端
-- Cloudflare Workers + D1 部署
-- GitHub Actions CI / CD
-- Docker 本地运行支持
+| 监控中心                        | 邮件中心                       |
+| ------------------------------- | ------------------------------ |
+| ![监控中心](images/monitor.png) | ![邮件中心](images/emails.png) |
 
-## 页面截图
+| 邮箱资产                          | 规则中心                      |
+| --------------------------------- | ----------------------------- |
+| ![邮箱资产](images/mailboxes.png) | ![规则中心](images/rules.png) |
 
-### 监控中心
+| 发信中心                         | API 文档                    |
+| -------------------------------- | --------------------------- |
+| ![发信中心](images/outbound.png) | ![API 文档](images/api.png) |
 
-![监控中心](images/monitor.png)
+## 架构概览
 
-### 邮件中心
-
-![邮件中心](images/emails.png)
-
-### 邮箱资产
-
-![邮箱资产](images/mailboxes.png)
-
-### 规则中心
-
-![规则中心](images/rules.png)
-
-### 发信中心
-
-![发信中心](images/outbound.png)
-
-### API 文档
-
-![API 文档](images/api.png)
-
-## 项目结构
-
-```text
-.
-├─ src/
-│  ├─ client/         React 管理后台
-│  ├─ core/           鉴权、数据库、发信、通知、Cloudflare 同步等核心逻辑
-│  ├─ handlers/       Worker 路由处理
-│  ├─ server/         前后端共享类型
-│  ├─ utils/          常量与工具函数
-│  └─ index.ts        Worker 入口
-├─ migrations/        D1 迁移脚本
-├─ docs/              部署、Secrets、计划书等文档
-├─ images/            README 截图
-├─ test/              单元测试与 E2E
-├─ Dockerfile
-├─ docker-compose.yml
-├─ wrangler.toml
-└─ package.json
+```mermaid
+flowchart LR
+  Mail["Cloudflare Email Routing / 邮件转发"] --> Worker["Cloudflare Worker"]
+  Worker --> D1["Cloudflare D1"]
+  Worker --> Webhook["Webhook 事件投递"]
+  Worker --> API["公共 API"]
+  Console["React 管理后台"] --> Worker
+  Worker --> Resend["Resend 发信"]
 ```
 
 ## 技术栈
@@ -158,15 +185,37 @@
 - Outbound: Resend
 - CI/CD: GitHub Actions + Wrangler
 
-## 环境要求
+## 项目结构
+
+```text
+.
+├─ src/
+│  ├─ client/         React 管理后台
+│  ├─ core/           鉴权、数据库、发信、通知、Cloudflare 同步等核心逻辑
+│  ├─ handlers/       Worker 路由处理
+│  ├─ server/         前后端共享类型
+│  ├─ shared/         多端共享能力定义
+│  ├─ utils/          常量与工具函数
+│  └─ index.ts        Worker 入口
+├─ migrations/        D1 迁移脚本
+├─ docs/              部署、Secrets、计划书等文档
+├─ images/            README 截图
+├─ test/              单元测试与 E2E
+├─ Dockerfile
+├─ docker-compose.yml
+├─ wrangler.toml
+└─ package.json
+```
+
+## 本地快速开始
+
+### 环境要求
 
 - Node.js 20+
 - npm 10+
 - Cloudflare 账号
-- Resend 账号（仅发信中心需要）
-- Docker / Docker Compose（可选，仅本地容器运行时需要）
-
-## 本地快速开始
+- Resend 账号，可选，仅发信中心需要
+- Docker / Docker Compose，可选，仅本地容器运行时需要
 
 ### 1. 安装依赖
 
@@ -290,14 +339,13 @@ Invoke-RestMethod -Uri "https://your-domain/api/emails/latest?address=code@your-
 
 ## 后台页面一览
 
-当前已经有这些页面：
-
 - 监控中心
 - 项目空间
 - 域名资产
 - 邮件中心
 - 邮件详情
 - 回收站
+- 生命周期策略
 - 规则管理
 - 白名单
 - 邮箱资产
@@ -309,7 +357,7 @@ Invoke-RestMethod -Uri "https://your-domain/api/emails/latest?address=code@your-
 - 系统日志
 - API 文档
 
-## GitHub Actions 持续部署
+## 推荐部署方式
 
 推荐把 GitHub Actions 作为唯一正式发布入口。
 
@@ -332,26 +380,13 @@ Invoke-RestMethod -Uri "https://your-domain/api/emails/latest?address=code@your-
 重要说明：
 
 - 正常部署不会重置线上数据库数据。
-- `deploy.yml` 只会执行 `wrangler d1 migrations apply DB --remote`。
+- 工作流执行的是 `wrangler d1 migrations apply DB --remote`。
 - 只有你自己写了破坏性迁移 SQL，才会影响已有数据。
 
 详细见：
 
 - [docs/CI-CD.md](docs/CI-CD.md)
 - [docs/GITHUB-SECRETS.md](docs/GITHUB-SECRETS.md)
-
-## 品牌与仓库命名
-
-当前项目品牌统一为：
-
-- 产品名：`TestMail Hub`
-- GitHub 仓库名：`testmail-hub`
-
-兼容性说明：
-
-- 这次只统一项目品牌、文档、包名和本地仓库命名
-- Cloudflare Worker 名仍保留为 `temp-email-worker`
-- 这样可以避免立刻影响现有自定义域名、Email Routing、Worker secrets 和 D1 绑定
 
 ## 多域名支持现状
 
@@ -365,14 +400,14 @@ Invoke-RestMethod -Uri "https://your-domain/api/emails/latest?address=code@your-
 - 邮箱创建时按工作空间过滤可选域名
 - 推荐默认域名
 
-当前还没有完全做完：
+当前还在继续增强：
 
-- 独立的 routing profile 模型
-- 多 provider 抽象
+- 独立 routing profile 能力深化
+- 更多 provider 抽象与接入
 - 更细的域名权限模型
 - 更完整的域名级策略中心
 
-所以现在它已经不是“只能识别多域名”，而是已经具备一版“多域名资产中心”，但还没到最终形态。
+所以它已经不只是“支持多个域名”，而是已经形成一版多域名资产中心，但还没有到最终形态。
 
 ## Docker 说明
 
@@ -433,9 +468,10 @@ Invoke-RestMethod -Uri "https://your-domain/api/emails/latest?address=code@your-
 ## 当前已知限制
 
 - 验证码提取准确率仍在持续优化中
-- 多域名已可运营，但 routing profile 还未独立建模
-- 团队角色体系还没细化到 `platform_admin / project_admin / operator / viewer`
-- retention 策略还没有完整后台配置中心
+- 多域名资产中心已能使用，但还在继续深化
+- 团队角色已细化到 `owner / platform_admin / project_admin / operator / viewer`
+- 成员中心第一版已落地，后续重点转向资源级权限和更完整治理模块
+- 生命周期策略中心已落地，下一步重点转向归档、留存审计和更细粒度生命周期动作
 - 自定义域名绑定和 DNS 仍需在 Cloudflare 控制台手动完成
 
 ## 发布前检查

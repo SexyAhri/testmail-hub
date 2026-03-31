@@ -1,12 +1,16 @@
 import type {
   AdminMutationPayload,
+  AdminListFilters,
   AdminUserRecord,
+  AuditLogListFilters,
   ApiTokenIssueResult,
   ApiTokenMutationPayload,
   ApiTokenRecord,
   ApiEnvelope,
   AuditLogRecord,
   DomainAssetRecord,
+  DomainRoutingProfileMutationPayload,
+  DomainRoutingProfileRecord,
   DomainAssetStatusRecord,
   DomainMutationPayload,
   DomainsPayload,
@@ -20,6 +24,9 @@ import type {
   MailboxRecord,
   MailboxSyncResult,
   MailboxPoolPayload,
+  NotificationDeliveryAttemptRecord,
+  NotificationDeliveriesPayload,
+  NotificationDeliveryBulkActionResult,
   NotificationDeliveryRecord,
   NotificationEndpointRecord,
   NotificationMutationPayload,
@@ -34,6 +41,9 @@ import type {
   OutboundTemplateRecord,
   OverviewStats,
   PaginationPayload,
+  RetentionJobRunRecord,
+  RetentionPolicyPayload,
+  RetentionPolicyRecord,
   RuleMutationPayload,
   RuleRecord,
   RuleTestResult,
@@ -94,10 +104,15 @@ export async function getSession() {
   return request<SessionPayload>("/auth/session");
 }
 
-export async function getDomains(filters?: { environment_id?: number | null; project_id?: number | null }) {
+export async function getDomains(filters?: {
+  environment_id?: number | null;
+  project_id?: number | null;
+  purpose?: "mailbox_create";
+}) {
   const params = new URLSearchParams();
   if (filters?.project_id) params.set("project_id", String(filters.project_id));
   if (filters?.environment_id) params.set("environment_id", String(filters.environment_id));
+  if (filters?.purpose) params.set("purpose", filters.purpose);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return request<DomainsPayload>(`/admin/domains${suffix}`);
 }
@@ -108,6 +123,14 @@ export async function getDomainAssets(page: number) {
 
 export async function getDomainAssetStatuses() {
   return request<DomainAssetStatusRecord[]>("/admin/domain-assets/status");
+}
+
+export async function getDomainProviders() {
+  return request<Array<import("../shared/domain-providers").DomainProviderDefinition>>("/admin/domain-providers");
+}
+
+export async function getDomainRoutingProfiles(page: number) {
+  return request<PaginationPayload<DomainRoutingProfileRecord>>(`/admin/domain-routing-profiles?page=${page}`);
 }
 
 export async function createDomainAsset(payload: DomainMutationPayload) {
@@ -135,11 +158,87 @@ export async function syncDomainAssetCatchAll(id: number) {
   );
 }
 
+export async function createDomainRoutingProfile(payload: DomainRoutingProfileMutationPayload) {
+  return request<{ ok: true }>("/admin/domain-routing-profiles", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateDomainRoutingProfile(id: number, payload: DomainRoutingProfileMutationPayload) {
+  return request<{ ok: true }>(`/admin/domain-routing-profiles/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function removeDomainRoutingProfile(id: number) {
+  return request<{ ok: true }>(`/admin/domain-routing-profiles/${id}`, { method: "DELETE" });
+}
+
 export async function getWorkspaceCatalog(includeDisabled = true) {
   const params = new URLSearchParams();
   if (includeDisabled) params.set("include_disabled", "1");
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return request<WorkspaceCatalog>(`/admin/workspace/catalog${suffix}`);
+}
+
+export async function getRetentionPolicies(
+  page: number,
+  filters: {
+    environment_id?: number | null;
+    is_enabled?: boolean | null;
+    keyword?: string;
+    mailbox_pool_id?: number | null;
+    project_id?: number | null;
+  } = {},
+) {
+  const params = new URLSearchParams({ page: String(page) });
+  if (filters.keyword) params.set("keyword", filters.keyword);
+  if (filters.project_id) params.set("project_id", String(filters.project_id));
+  if (filters.environment_id) params.set("environment_id", String(filters.environment_id));
+  if (filters.mailbox_pool_id) params.set("mailbox_pool_id", String(filters.mailbox_pool_id));
+  if (filters.is_enabled !== null && filters.is_enabled !== undefined) {
+    params.set("is_enabled", filters.is_enabled ? "1" : "0");
+  }
+  return request<PaginationPayload<RetentionPolicyRecord>>(`/admin/retention-policies?${params.toString()}`);
+}
+
+export async function getRetentionJobRuns(
+  page: number,
+  filters: {
+    status?: "failed" | "success" | null;
+    trigger_source?: string | null;
+  } = {},
+) {
+  const params = new URLSearchParams({ page: String(page) });
+  if (filters.status) params.set("status", filters.status);
+  if (filters.trigger_source) params.set("trigger_source", filters.trigger_source);
+  return request<PaginationPayload<RetentionJobRunRecord>>(`/admin/retention-jobs?${params.toString()}`);
+}
+
+export async function triggerRetentionJob() {
+  return request<{ detail: Record<string, unknown>; job_id: number; ok: true }>("/admin/retention-jobs/run", {
+    method: "POST",
+  });
+}
+
+export async function createRetentionPolicy(payload: RetentionPolicyPayload) {
+  return request<RetentionPolicyRecord>("/admin/retention-policies", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateRetentionPolicy(id: number, payload: RetentionPolicyPayload) {
+  return request<RetentionPolicyRecord>(`/admin/retention-policies/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function removeRetentionPolicy(id: number) {
+  return request<{ ok: true }>(`/admin/retention-policies/${id}`, { method: "DELETE" });
 }
 
 export async function getOverviewStats() {
@@ -163,6 +262,14 @@ export async function updateEmailMetadata(messageId: string, payload: EmailMetad
 
 export async function deleteEmail(messageId: string) {
   return request<{ ok: true }>(`/admin/emails/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+}
+
+export async function archiveEmail(messageId: string) {
+  return request<{ ok: true }>(`/admin/emails/${encodeURIComponent(messageId)}/archive`, { method: "POST" });
+}
+
+export async function unarchiveEmail(messageId: string) {
+  return request<{ ok: true }>(`/admin/emails/${encodeURIComponent(messageId)}/unarchive`, { method: "POST" });
 }
 
 export async function restoreEmail(messageId: string) {
@@ -334,8 +441,19 @@ export async function removeMailboxPool(id: number) {
   return request<{ ok: true }>(`/admin/mailbox-pools/${id}`, { method: "DELETE" });
 }
 
-export async function getAdmins(page: number) {
-  return request<PaginationPayload<AdminUserRecord>>(`/admin/admins?page=${page}`);
+export async function getAdmins(
+  page: number,
+  filters: AdminListFilters = {},
+) {
+  const params = new URLSearchParams({ page: String(page) });
+  if (filters.keyword) params.set("keyword", filters.keyword);
+  if (filters.role) params.set("role", filters.role);
+  if (filters.access_scope) params.set("access_scope", filters.access_scope);
+  if (filters.project_id) params.set("project_id", String(filters.project_id));
+  if (filters.is_enabled !== null && filters.is_enabled !== undefined) {
+    params.set("is_enabled", filters.is_enabled ? "1" : "0");
+  }
+  return request<PaginationPayload<AdminUserRecord>>(`/admin/admins?${params.toString()}`);
 }
 
 export async function createAdmin(payload: AdminMutationPayload) {
@@ -378,9 +496,17 @@ export async function testNotification(id: number) {
   return request<{ ok: true }>(`/admin/notifications/${id}/test`, { method: "POST" });
 }
 
-export async function getNotificationDeliveries(id: number, page: number) {
-  return request<PaginationPayload<NotificationDeliveryRecord>>(
-    `/admin/notifications/${id}/deliveries?page=${page}`,
+export async function getNotificationDeliveries(
+  id: number,
+  page: number,
+  filters: {
+    dead_letter_only?: boolean;
+  } = {},
+) {
+  const params = new URLSearchParams({ page: String(page) });
+  if (filters.dead_letter_only) params.set("dead_letter_only", "1");
+  return request<NotificationDeliveriesPayload>(
+    `/admin/notifications/${id}/deliveries?${params.toString()}`,
   );
 }
 
@@ -388,6 +514,39 @@ export async function retryNotificationDelivery(id: number) {
   return request<{ delivery: NotificationDeliveryRecord; ok: true }>(
     `/admin/notifications/deliveries/${id}/retry`,
     { method: "POST" },
+  );
+}
+
+export async function getNotificationDeliveryAttempts(id: number, page: number) {
+  return request<PaginationPayload<NotificationDeliveryAttemptRecord>>(
+    `/admin/notifications/deliveries/${id}/attempts?page=${page}`,
+  );
+}
+
+export async function resolveNotificationDelivery(id: number) {
+  return request<{ ok: true }>(
+    `/admin/notifications/deliveries/${id}/resolve`,
+    { method: "POST" },
+  );
+}
+
+export async function retryNotificationDeliveries(ids: number[]) {
+  return request<NotificationDeliveryBulkActionResult>(
+    "/admin/notifications/deliveries/bulk-retry",
+    {
+      method: "POST",
+      body: JSON.stringify({ delivery_ids: ids }),
+    },
+  );
+}
+
+export async function resolveNotificationDeliveries(ids: number[]) {
+  return request<NotificationDeliveryBulkActionResult>(
+    "/admin/notifications/deliveries/bulk-resolve",
+    {
+      method: "POST",
+      body: JSON.stringify({ delivery_ids: ids }),
+    },
   );
 }
 
@@ -508,8 +667,17 @@ export async function removeOutboundContact(id: number) {
   return request<{ ok: true }>(`/admin/outbound/contacts/${id}`, { method: "DELETE" });
 }
 
-export async function getAuditLogs(page: number) {
-  return request<PaginationPayload<AuditLogRecord>>(`/admin/audit?page=${page}`);
+export async function getAuditLogs(
+  page: number,
+  filters: AuditLogListFilters = {},
+) {
+  const params = new URLSearchParams({ page: String(page) });
+  if (filters.keyword) params.set("keyword", filters.keyword);
+  if (filters.entity_type) params.set("entity_type", filters.entity_type);
+  if (filters.entity_id) params.set("entity_id", filters.entity_id);
+  if (filters.action) params.set("action", filters.action);
+  if (filters.action_prefix) params.set("action_prefix", filters.action_prefix);
+  return request<PaginationPayload<AuditLogRecord>>(`/admin/audit?${params.toString()}`);
 }
 
 export async function getErrorEvents(params: { keyword?: string; page: number; source?: string }) {

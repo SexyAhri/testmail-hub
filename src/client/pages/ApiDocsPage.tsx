@@ -11,6 +11,10 @@ import { Alert, Button, Card, Col, List, Row, Space, Tabs, Tag, Typography } fro
 import type { ReactNode } from "react";
 
 import { PageHeader } from "../components";
+import {
+  NOTIFICATION_EVENT_CATEGORY_LABELS,
+  NOTIFICATION_EVENT_DEFINITIONS,
+} from "../../utils/constants";
 
 interface ApiDocsPageProps {
   mailboxDomain: string;
@@ -26,6 +30,13 @@ interface PermissionItem {
   description: string;
   value: string;
 }
+
+const WEBHOOK_EVENT_ITEMS = NOTIFICATION_EVENT_DEFINITIONS.map(item => ({
+  categoryLabel: NOTIFICATION_EVENT_CATEGORY_LABELS[item.category],
+  description: item.description,
+  key: item.key,
+  label: item.label,
+}));
 
 function CodeBlock({ children }: { children: string }) {
   return (
@@ -473,6 +484,34 @@ const extraction = await fetch(
                       <Typography.Paragraph type="secondary">
                         通知中心同时支持全局 Webhook 和项目绑定 Webhook。项目绑定端点只会接收命中绑定项目的事件。
                       </Typography.Paragraph>
+
+                      <List<(typeof WEBHOOK_EVENT_ITEMS)[number]>
+                        size="small"
+                        dataSource={WEBHOOK_EVENT_ITEMS}
+                        style={{ marginBottom: 12 }}
+                        renderItem={item => (
+                          <List.Item>
+                            <List.Item.Meta
+                              title={(
+                                <Space wrap size={[8, 4]}>
+                                  <Tag color="blue">{item.categoryLabel}</Tag>
+                                  <Typography.Text strong>{item.label}</Typography.Text>
+                                  <Typography.Text code>{item.key}</Typography.Text>
+                                </Space>
+                              )}
+                              description={item.description}
+                            />
+                          </List.Item>
+                        )}
+                      />
+
+                      <Alert
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: 12 }}
+                        message="事件命名收敛"
+                        description="控制台会把旧别名自动归一到标准事件名，例如 `email.match` 会保存为 `email.matched`。推荐始终使用文档里的标准事件名。"
+                      />
 
                       <CodeBlock>{`{
   "event": "email.received",

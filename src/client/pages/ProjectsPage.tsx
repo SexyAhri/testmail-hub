@@ -1,4 +1,4 @@
-import { App, Button, Col, Form, Input, Select, Switch, Tabs } from "antd";
+import { Alert, App, Button, Col, Form, Input, Select, Switch, Tabs } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo, useState } from "react";
 
@@ -18,15 +18,18 @@ import { ActionButtons, DataTable, FormDrawer, MetricCard, MetricGrid, PageHeade
 import type {
   MailboxPoolPayload,
   MailboxPoolRecord,
+  SessionPayload,
   WorkspaceCatalog,
   WorkspaceEnvironmentPayload,
   WorkspaceEnvironmentRecord,
   WorkspaceProjectPayload,
   WorkspaceProjectRecord,
 } from "../types";
+import { canManageGlobalSettings } from "../permissions";
 import { formatDateTime, normalizeApiError } from "../utils";
 
 interface ProjectsPageProps {
+  currentUser?: SessionPayload["user"] | null;
   onUnauthorized: () => void;
 }
 
@@ -57,7 +60,7 @@ const INITIAL_MAILBOX_POOL: Partial<MailboxPoolPayload> = {
   slug: "",
 };
 
-export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
+export default function ProjectsPage({ currentUser, onUnauthorized }: ProjectsPageProps) {
   const { message } = App.useApp();
   const [projectForm] = Form.useForm<WorkspaceProjectPayload>();
   const [environmentForm] = Form.useForm<WorkspaceEnvironmentPayload>();
@@ -71,6 +74,7 @@ export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
   const [editingProject, setEditingProject] = useState<WorkspaceProjectRecord | null>(null);
   const [editingEnvironment, setEditingEnvironment] = useState<WorkspaceEnvironmentRecord | null>(null);
   const [editingMailboxPool, setEditingMailboxPool] = useState<MailboxPoolRecord | null>(null);
+  const canManageWorkspace = canManageGlobalSettings(currentUser);
 
   const mailboxPoolProjectId = Form.useWatch("project_id", mailboxPoolForm);
 
@@ -297,11 +301,15 @@ export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
       key: "action",
       width: 120,
       render: (_value, record) => (
-        <ActionButtons
-          onEdit={() => openProjectEdit(record)}
-          onDelete={() => void handleProjectDelete(record.id)}
-          deleteConfirmTitle="确认删除该项目吗？如已有环境、邮箱池或历史邮件引用，将被拦截。"
-        />
+        canManageWorkspace ? (
+          <ActionButtons
+            onEdit={() => openProjectEdit(record)}
+            onDelete={() => void handleProjectDelete(record.id)}
+            deleteConfirmTitle="确认删除该项目吗？如已有环境、邮箱池或历史邮件引用，将被拦截。"
+          />
+        ) : (
+          <span style={{ color: "#999" }}>只读</span>
+        )
       ),
     },
   ];
@@ -320,11 +328,15 @@ export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
       key: "action",
       width: 120,
       render: (_value, record) => (
-        <ActionButtons
-          onEdit={() => openEnvironmentEdit(record)}
-          onDelete={() => void handleEnvironmentDelete(record.id)}
-          deleteConfirmTitle="确认删除该环境吗？如已有邮箱池、邮箱或历史邮件引用，将被拦截。"
-        />
+        canManageWorkspace ? (
+          <ActionButtons
+            onEdit={() => openEnvironmentEdit(record)}
+            onDelete={() => void handleEnvironmentDelete(record.id)}
+            deleteConfirmTitle="确认删除该环境吗？如已有邮箱池、邮箱或历史邮件引用，将被拦截。"
+          />
+        ) : (
+          <span style={{ color: "#999" }}>只读</span>
+        )
       ),
     },
   ];
@@ -343,11 +355,15 @@ export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
       key: "action",
       width: 120,
       render: (_value, record) => (
-        <ActionButtons
-          onEdit={() => openMailboxPoolEdit(record)}
-          onDelete={() => void handleMailboxPoolDelete(record.id)}
-          deleteConfirmTitle="确认删除该邮箱池吗？如已有邮箱或历史邮件引用，将被拦截。"
-        />
+        canManageWorkspace ? (
+          <ActionButtons
+            onEdit={() => openMailboxPoolEdit(record)}
+            onDelete={() => void handleMailboxPoolDelete(record.id)}
+            deleteConfirmTitle="确认删除该邮箱池吗？如已有邮箱或历史邮件引用，将被拦截。"
+          />
+        ) : (
+          <span style={{ color: "#999" }}>只读</span>
+        )
       ),
     },
   ];
@@ -368,7 +384,18 @@ export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
         title="项目空间"
         subtitle="先把项目、环境、邮箱池这三层基础模型落稳，后续权限隔离、API 范围和团队协作都会基于这里继续扩展。"
         extra={<Button onClick={() => void loadData()} loading={loading}>刷新</Button>}
+        tags={canManageWorkspace ? undefined : [{ color: "gold", label: "只读视角" }]}
       />
+
+      {!canManageWorkspace ? (
+        <Alert
+          showIcon
+          type="info"
+          message="项目空间当前为只读模式"
+          description="项目、环境和邮箱池属于平台级工作空间模型。项目级管理员和只读成员当前只能查看，不能在这里新增、编辑或删除。"
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       <MetricGrid>
         <MetricCard title="项目数量" value={catalog.projects.length} icon={<>P</>} percent={Math.min(100, catalog.projects.length * 10)} color="#1890ff" />
@@ -385,7 +412,7 @@ export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
             children: (
               <DataTable
                 cardTitle="项目列表"
-                cardExtra={<Button type="primary" onClick={openProjectCreate}>新增项目</Button>}
+                cardExtra={canManageWorkspace ? <Button type="primary" onClick={openProjectCreate}>新增项目</Button> : undefined}
                 columns={projectColumns}
                 dataSource={catalog.projects}
                 loading={loading}
@@ -400,7 +427,7 @@ export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
             children: (
               <DataTable
                 cardTitle="环境列表"
-                cardExtra={<Button type="primary" onClick={openEnvironmentCreate}>新增环境</Button>}
+                cardExtra={canManageWorkspace ? <Button type="primary" onClick={openEnvironmentCreate}>新增环境</Button> : undefined}
                 columns={environmentColumns}
                 dataSource={catalog.environments}
                 loading={loading}
@@ -415,7 +442,7 @@ export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
             children: (
               <DataTable
                 cardTitle="邮箱池列表"
-                cardExtra={<Button type="primary" onClick={openMailboxPoolCreate}>新增邮箱池</Button>}
+                cardExtra={canManageWorkspace ? <Button type="primary" onClick={openMailboxPoolCreate}>新增邮箱池</Button> : undefined}
                 columns={mailboxPoolColumns}
                 dataSource={catalog.mailbox_pools}
                 loading={loading}
@@ -427,118 +454,124 @@ export default function ProjectsPage({ onUnauthorized }: ProjectsPageProps) {
         ]}
       />
 
-      <FormDrawer
-        title={editingProject ? "编辑项目" : "新增项目"}
-        open={projectDrawerOpen}
-        onClose={() => setProjectDrawerOpen(false)}
-        onSubmit={() => void handleProjectSubmit()}
-        form={projectForm}
-        loading={saving}
-      >
-        <Col span={24}>
-          <Form.Item label="项目名称" name="name" rules={[{ required: true, message: "请输入项目名称" }]}>
-            <Input placeholder="例如：账号体系测试" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="项目标识" name="slug">
-            <Input placeholder="例如：account-auth" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="描述" name="description">
-            <Input.TextArea rows={3} placeholder="补充项目用途、业务线或交付说明" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
-            <Switch checkedChildren="启用" unCheckedChildren="停用" />
-          </Form.Item>
-        </Col>
-      </FormDrawer>
+      {canManageWorkspace ? (
+        <FormDrawer
+          title={editingProject ? "编辑项目" : "新增项目"}
+          open={projectDrawerOpen}
+          onClose={() => setProjectDrawerOpen(false)}
+          onSubmit={() => void handleProjectSubmit()}
+          form={projectForm}
+          loading={saving}
+        >
+          <Col span={24}>
+            <Form.Item label="项目名称" name="name" rules={[{ required: true, message: "请输入项目名称" }]}>
+              <Input placeholder="例如：账号体系测试" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="项目标识" name="slug">
+              <Input placeholder="例如：account-auth" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="描述" name="description">
+              <Input.TextArea rows={3} placeholder="补充项目用途、业务线或交付说明" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+        </FormDrawer>
+      ) : null}
 
-      <FormDrawer
-        title={editingEnvironment ? "编辑环境" : "新增环境"}
-        open={environmentDrawerOpen}
-        onClose={() => setEnvironmentDrawerOpen(false)}
-        onSubmit={() => void handleEnvironmentSubmit()}
-        form={environmentForm}
-        loading={saving}
-      >
-        <Col span={24}>
-          <Form.Item label="所属项目" name="project_id" rules={[{ required: true, message: "请选择项目" }]}>
-            <Select options={environmentProjectOptions} placeholder="选择项目" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="环境名称" name="name" rules={[{ required: true, message: "请输入环境名称" }]}>
-            <Input placeholder="例如：staging" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="环境标识" name="slug">
-            <Input placeholder="例如：staging" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="描述" name="description">
-            <Input.TextArea rows={3} placeholder="说明环境用途，例如联调、灰度、生产" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
-            <Switch checkedChildren="启用" unCheckedChildren="停用" />
-          </Form.Item>
-        </Col>
-      </FormDrawer>
+      {canManageWorkspace ? (
+        <FormDrawer
+          title={editingEnvironment ? "编辑环境" : "新增环境"}
+          open={environmentDrawerOpen}
+          onClose={() => setEnvironmentDrawerOpen(false)}
+          onSubmit={() => void handleEnvironmentSubmit()}
+          form={environmentForm}
+          loading={saving}
+        >
+          <Col span={24}>
+            <Form.Item label="所属项目" name="project_id" rules={[{ required: true, message: "请选择项目" }]}>
+              <Select options={environmentProjectOptions} placeholder="选择项目" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="环境名称" name="name" rules={[{ required: true, message: "请输入环境名称" }]}>
+              <Input placeholder="例如：staging" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="环境标识" name="slug">
+              <Input placeholder="例如：staging" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="描述" name="description">
+              <Input.TextArea rows={3} placeholder="说明环境用途，例如联调、灰度、生产" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+        </FormDrawer>
+      ) : null}
 
-      <FormDrawer
-        title={editingMailboxPool ? "编辑邮箱池" : "新增邮箱池"}
-        open={mailboxPoolDrawerOpen}
-        onClose={() => setMailboxPoolDrawerOpen(false)}
-        onSubmit={() => void handleMailboxPoolSubmit()}
-        form={mailboxPoolForm}
-        loading={saving}
-      >
-        <Col span={24}>
-          <Form.Item label="所属项目" name="project_id" rules={[{ required: true, message: "请选择项目" }]}>
-            <Select
-              options={projectOptions}
-              placeholder="选择项目"
-              onChange={() => mailboxPoolForm.setFieldValue("environment_id", undefined)}
-            />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="所属环境" name="environment_id" rules={[{ required: true, message: "请选择环境" }]}>
-            <Select
-              options={filteredPoolEnvironmentOptions}
-              placeholder={mailboxPoolProjectId ? "选择环境" : "请先选择项目"}
-              disabled={!mailboxPoolProjectId}
-            />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="邮箱池名称" name="name" rules={[{ required: true, message: "请输入邮箱池名称" }]}>
-            <Input placeholder="例如：登录验证码池" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="邮箱池标识" name="slug">
-            <Input placeholder="例如：login-codes" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="描述" name="description">
-            <Input.TextArea rows={3} placeholder="说明该邮箱池服务的测试场景或团队" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
-            <Switch checkedChildren="启用" unCheckedChildren="停用" />
-          </Form.Item>
-        </Col>
-      </FormDrawer>
+      {canManageWorkspace ? (
+        <FormDrawer
+          title={editingMailboxPool ? "编辑邮箱池" : "新增邮箱池"}
+          open={mailboxPoolDrawerOpen}
+          onClose={() => setMailboxPoolDrawerOpen(false)}
+          onSubmit={() => void handleMailboxPoolSubmit()}
+          form={mailboxPoolForm}
+          loading={saving}
+        >
+          <Col span={24}>
+            <Form.Item label="所属项目" name="project_id" rules={[{ required: true, message: "请选择项目" }]}>
+              <Select
+                options={projectOptions}
+                placeholder="选择项目"
+                onChange={() => mailboxPoolForm.setFieldValue("environment_id", undefined)}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="所属环境" name="environment_id" rules={[{ required: true, message: "请选择环境" }]}>
+              <Select
+                options={filteredPoolEnvironmentOptions}
+                placeholder={mailboxPoolProjectId ? "选择环境" : "请先选择项目"}
+                disabled={!mailboxPoolProjectId}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="邮箱池名称" name="name" rules={[{ required: true, message: "请输入邮箱池名称" }]}>
+              <Input placeholder="例如：登录验证码池" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="邮箱池标识" name="slug">
+              <Input placeholder="例如：login-codes" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="描述" name="description">
+              <Input.TextArea rows={3} placeholder="说明该邮箱池服务的测试场景或团队" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+        </FormDrawer>
+      ) : null}
     </div>
   );
 }

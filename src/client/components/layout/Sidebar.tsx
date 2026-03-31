@@ -4,6 +4,7 @@ import {
   AuditOutlined,
   BellOutlined,
   DashboardOutlined,
+  FieldTimeOutlined,
   FileSearchOutlined,
   InboxOutlined,
   KeyOutlined,
@@ -19,7 +20,9 @@ import { Layout, Menu } from "antd";
 import type { MenuProps } from "antd";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { hasAdminPermission, isReadOnlyAdminRole } from "../../../utils/constants";
 import { useTheme } from "../../providers";
+import type { SessionPayload } from "../../types";
 import { BrandLogo } from "./BrandLogo";
 
 const { Sider } = Layout;
@@ -31,8 +34,8 @@ export interface SidebarItem {
   label: string;
 }
 
-export function buildDefaultSidebarItems(): SidebarItem[] {
-  return [
+export function buildDefaultSidebarItems(user?: SessionPayload["user"] | null): SidebarItem[] {
+  const items: SidebarItem[] = [
     { key: "/monitor", icon: <DashboardOutlined />, label: "监控中心" },
     { key: "/projects", icon: <AppstoreOutlined />, label: "项目空间" },
     { key: "/domains", icon: <AppstoreOutlined />, label: "域名资产" },
@@ -42,6 +45,7 @@ export function buildDefaultSidebarItems(): SidebarItem[] {
       label: "邮件管理",
       children: [
         { key: "/emails", icon: <FileSearchOutlined />, label: "邮件中心" },
+        { key: "/archives", icon: <InboxOutlined />, label: "归档中心" },
         { key: "/trash", icon: <NotificationOutlined />, label: "回收站" },
         { key: "/mailboxes", icon: <InboxOutlined />, label: "邮箱资产" },
         { key: "/outbound", icon: <SendOutlined />, label: "发信中心" },
@@ -52,6 +56,7 @@ export function buildDefaultSidebarItems(): SidebarItem[] {
       icon: <SafetyCertificateOutlined />,
       label: "策略中心",
       children: [
+        { key: "/retention", icon: <FieldTimeOutlined />, label: "生命周期策略" },
         { key: "/rules", icon: <ToolOutlined />, label: "规则管理" },
         { key: "/whitelist", icon: <NotificationOutlined />, label: "白名单" },
         { key: "/notifications", icon: <BellOutlined />, label: "通知配置" },
@@ -70,6 +75,32 @@ export function buildDefaultSidebarItems(): SidebarItem[] {
     },
     { key: "/api", icon: <ApiOutlined />, label: "开放 API" },
   ];
+
+  const filteredItems = items
+    .map(item => {
+      if (item.key !== "system" || !item.children) return item;
+
+      return {
+        ...item,
+        children: item.children.filter(child => {
+          if (isReadOnlyAdminRole(user?.role, user?.access_scope || "all")) {
+            return !["/admins", "/api-tokens", "/system/audit", "/system/errors"].includes(child.key);
+          }
+
+          if (!hasAdminPermission(user?.role, "admins:read", user?.access_scope || "all") && child.key === "/admins") {
+            return false;
+          }
+          if (user?.access_scope === "bound") {
+            return !["/system/audit", "/system/errors"].includes(child.key);
+          }
+
+          return true;
+        }),
+      };
+    })
+    .filter(item => !item.children || item.children.length > 0);
+
+  return filteredItems;
 }
 
 function convertToMenuItems(items: SidebarItem[]): Required<MenuProps>["items"][number][] {
@@ -113,7 +144,11 @@ function findSelectedKey(items: SidebarItem[], pathname: string): string {
   const walk = (nodes: SidebarItem[]) => {
     for (const item of nodes) {
       if (item.children?.length) walk(item.children);
-      if (item.key.startsWith("/") && (pathname === item.key || pathname.startsWith(`${item.key}/`)) && item.key.length > bestLength) {
+      if (
+        item.key.startsWith("/")
+        && (pathname === item.key || pathname.startsWith(`${item.key}/`))
+        && item.key.length > bestLength
+      ) {
         bestMatch = item.key;
         bestLength = item.key.length;
       }

@@ -6,6 +6,7 @@ import {
   FileSearchOutlined,
   GlobalOutlined,
   InfoCircleOutlined,
+  InboxOutlined,
   LinkOutlined,
   RollbackOutlined,
   SaveOutlined,
@@ -33,11 +34,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import {
+  archiveEmail,
   buildAttachmentDownloadUrl,
   deleteEmail,
   getEmailDetail,
   purgeEmail,
   restoreEmail,
+  unarchiveEmail,
   updateEmailMetadata,
 } from "../api";
 import { DataTable, MetricCard, PageHeader } from "../components";
@@ -165,6 +168,38 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
     try {
       await restoreEmail(detail.message_id);
       message.success("邮件已恢复");
+      await loadDetail();
+    } catch (error) {
+      if (normalizeApiError(error) === "UNAUTHORIZED") {
+        onUnauthorized();
+        return;
+      }
+      message.error(normalizeApiError(error));
+    }
+  }
+
+  async function handleArchive() {
+    if (!detail) return;
+
+    try {
+      await archiveEmail(detail.message_id);
+      message.success("邮件已归档");
+      await loadDetail();
+    } catch (error) {
+      if (normalizeApiError(error) === "UNAUTHORIZED") {
+        onUnauthorized();
+        return;
+      }
+      message.error(normalizeApiError(error));
+    }
+  }
+
+  async function handleUnarchive() {
+    if (!detail) return;
+
+    try {
+      await unarchiveEmail(detail.message_id);
+      message.success("邮件已取消归档");
       await loadDetail();
     } catch (error) {
       if (normalizeApiError(error) === "UNAUTHORIZED") {
@@ -321,6 +356,9 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
     { label: "邮箱池", value: detail.mailbox_pool_name || "-" },
     { label: "归属邮箱", value: detail.primary_mailbox_address || "-" },
     { label: "接收时间", value: formatDateTime(detail.received_at) },
+    { label: "归档时间", value: formatDateTime(detail.archived_at) },
+    { label: "归档操作人", value: detail.archived_by || "-" },
+    { label: "归档原因", value: detail.archive_reason || "-" },
     { label: "Message ID", value: detail.message_id },
     { label: "删除时间", value: formatDateTime(detail.deleted_at) },
   ];
@@ -345,7 +383,10 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
         subtitle={`${detail.from_address} -> ${detail.to_address}`}
         extra={(
           <Space wrap>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(detail.deleted_at ? "/trash" : "/emails")}>
+            <Button
+              icon={<ArrowLeftOutlined />}
+              onClick={() => navigate(detail.deleted_at ? "/trash" : detail.archived_at ? "/archives" : "/emails")}
+            >
               返回列表
             </Button>
             {detail.deleted_at ? (
@@ -360,11 +401,22 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
                 </Popconfirm>
               </>
             ) : (
-              <Popconfirm title="确定将这封邮件移入回收站吗？" onConfirm={() => void handleDelete()}>
-                <Button danger icon={<DeleteOutlined />}>
-                  删除邮件
-                </Button>
-              </Popconfirm>
+              <>
+                {detail.archived_at ? (
+                  <Button icon={<RollbackOutlined />} onClick={() => void handleUnarchive()}>
+                    取消归档
+                  </Button>
+                ) : (
+                  <Button icon={<InboxOutlined />} onClick={() => void handleArchive()}>
+                    归档邮件
+                  </Button>
+                )}
+                <Popconfirm title="确定将这封邮件移入回收站吗？" onConfirm={() => void handleDelete()}>
+                  <Button danger icon={<DeleteOutlined />}>
+                    删除邮件
+                  </Button>
+                </Popconfirm>
+              </>
             )}
           </Space>
         )}
@@ -400,11 +452,11 @@ export default function EmailDetailPage({ onUnauthorized }: EmailDetailPageProps
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <MetricCard
-            title="提取链接"
-            value={detail.extraction.links.length}
-            icon={<LinkOutlined />}
-            percent={Math.min(100, detail.extraction.links.length * 20)}
-            color="#722ed1"
+            title={detail.archived_at ? "当前状态" : "提取链接"}
+            value={detail.archived_at ? "已归档" : detail.extraction.links.length}
+            icon={detail.archived_at ? <InboxOutlined /> : <LinkOutlined />}
+            percent={detail.archived_at ? 100 : Math.min(100, detail.extraction.links.length * 20)}
+            color={detail.archived_at ? "#0f766e" : "#722ed1"}
           />
         </Col>
       </Row>

@@ -1,4 +1,4 @@
-import { App, Button, Card, Col, Form, Input, Popconfirm, Row, Space, Switch, Typography } from "antd";
+import { Alert, App, Button, Card, Col, Form, Input, Popconfirm, Row, Space, Switch, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo, useState } from "react";
 
@@ -21,10 +21,12 @@ import {
   StatusTag,
 } from "../components";
 import { useTableSelection } from "../hooks/useTableSelection";
+import { canManageGlobalSettings, getReadonlyNotice, type CurrentUser } from "../permissions";
 import type { WhitelistMutationPayload, WhitelistRecord } from "../types";
 import { buildBatchActionMessage, formatDateTime, loadAllPages, normalizeApiError, runBatchAction } from "../utils";
 
 interface WhitelistPageProps {
+  currentUser?: CurrentUser;
   onUnauthorized: () => void;
 }
 
@@ -34,7 +36,7 @@ const INITIAL_VALUES: WhitelistMutationPayload = {
   sender_pattern: "",
 };
 
-export default function WhitelistPage({ onUnauthorized }: WhitelistPageProps) {
+export default function WhitelistPage({ currentUser, onUnauthorized }: WhitelistPageProps) {
   const { message } = App.useApp();
   const [form] = Form.useForm<WhitelistMutationPayload>();
   const [items, setItems] = useState<WhitelistRecord[]>([]);
@@ -46,6 +48,8 @@ export default function WhitelistPage({ onUnauthorized }: WhitelistPageProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<WhitelistRecord | null>(null);
   const [whitelistEnabled, setWhitelistEnabled] = useState(true);
+  const canManageWhitelist = canManageGlobalSettings(currentUser);
+  const readonlyNotice = getReadonlyNotice(currentUser, "白名单");
 
   useEffect(() => {
     void loadData();
@@ -251,11 +255,15 @@ export default function WhitelistPage({ onUnauthorized }: WhitelistPageProps) {
       key: "action",
       width: 140,
       render: (_value, record) => (
-        <ActionButtons
-          deleteConfirmTitle="确定删除这条白名单规则吗？"
-          onEdit={() => openEditDrawer(record)}
-          onDelete={() => void handleDelete(record.id)}
-        />
+        canManageWhitelist ? (
+          <ActionButtons
+            deleteConfirmTitle="确定删除这条白名单规则吗？"
+            onEdit={() => openEditDrawer(record)}
+            onDelete={() => void handleDelete(record.id)}
+          />
+        ) : (
+          <span style={{ color: "#999" }}>只读</span>
+        )
       ),
     },
   ];
@@ -265,7 +273,18 @@ export default function WhitelistPage({ onUnauthorized }: WhitelistPageProps) {
       <PageHeader
         title="白名单"
         subtitle="管理允许放行的发件人模式，支持备注、状态控制以及全局白名单开关。"
+        tags={canManageWhitelist ? undefined : [{ color: "gold", label: "只读视角" }]}
       />
+
+      {readonlyNotice ? (
+        <Alert
+          showIcon
+          type="info"
+          message={readonlyNotice.title}
+          description={readonlyNotice.description}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       <Card size="small" style={{ borderRadius: 12, marginBottom: 16 }}>
         <div
@@ -287,6 +306,7 @@ export default function WhitelistPage({ onUnauthorized }: WhitelistPageProps) {
             checked={whitelistEnabled}
             checkedChildren="开"
             unCheckedChildren="关"
+            disabled={!canManageWhitelist}
             loading={settingsLoading || settingsSaving}
             onChange={value => void handleSettingsChange(value)}
           />
@@ -323,14 +343,14 @@ export default function WhitelistPage({ onUnauthorized }: WhitelistPageProps) {
           searchValue={searchText}
           onSearchChange={value => setSearchText(value)}
           onReset={() => setSearchText("")}
-          onAdd={openCreateDrawer}
+          onAdd={canManageWhitelist ? openCreateDrawer : undefined}
           addText="新增白名单规则"
         />
       </div>
 
       <DataTable
         cardTitle="白名单列表"
-        cardToolbar={(
+        cardToolbar={canManageWhitelist ? (
           <BatchActionsBar selectedCount={selectedItems.length} onClear={clearSelection}>
             <Button onClick={() => void handleBatchToggle(true)}>
               批量启用
@@ -347,43 +367,45 @@ export default function WhitelistPage({ onUnauthorized }: WhitelistPageProps) {
               </Button>
             </Popconfirm>
           </BatchActionsBar>
-        )}
+        ) : undefined}
         columns={columns}
         dataSource={filteredItems}
         loading={loading}
-        rowSelection={rowSelection}
+        rowSelection={canManageWhitelist ? rowSelection : undefined}
         rowKey="id"
         pageSize={10}
       />
 
-      <FormDrawer
-        title={editing ? "编辑白名单规则" : "新增白名单规则"}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        onSubmit={() => void handleSubmit()}
-        form={form}
-        loading={saving}
-      >
-        <Col span={24}>
-          <Form.Item
-            label="发件人模式"
-            name="sender_pattern"
-            rules={[{ required: true, message: "请输入发件人模式" }]}
-          >
-            <Input.TextArea rows={6} placeholder={"示例: notifications@github\\.com$"} />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="备注" name="note">
-            <Input placeholder="示例: GitHub 官方通知" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
-            <Switch checkedChildren="开" unCheckedChildren="关" />
-          </Form.Item>
-        </Col>
-      </FormDrawer>
+      {canManageWhitelist ? (
+        <FormDrawer
+          title={editing ? "编辑白名单规则" : "新增白名单规则"}
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={() => void handleSubmit()}
+          form={form}
+          loading={saving}
+        >
+          <Col span={24}>
+            <Form.Item
+              label="发件人模式"
+              name="sender_pattern"
+              rules={[{ required: true, message: "请输入发件人模式" }]}
+            >
+              <Input.TextArea rows={6} placeholder={"示例: notifications@github\\.com$"} />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="备注" name="note">
+              <Input placeholder="示例: GitHub 官方通知" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
+              <Switch checkedChildren="开" unCheckedChildren="关" />
+            </Form.Item>
+          </Col>
+        </FormDrawer>
+      ) : null}
     </div>
   );
 }

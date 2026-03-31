@@ -1,5 +1,5 @@
 import { InboxOutlined, MailOutlined, SyncOutlined, ThunderboltOutlined } from "@ant-design/icons";
-import { App, Button, Col, DatePicker, Form, Input, Popconfirm, Row, Select, Switch, Tag } from "antd";
+import { Alert, App, Button, Col, DatePicker, Form, Input, Popconfirm, Row, Select, Switch, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { useEffect, useMemo, useState } from "react";
@@ -17,10 +17,20 @@ import {
 } from "../api";
 import { ActionButtons, BatchActionsBar, DataTable, FormDrawer, MetricCard, PageHeader, SearchToolbar, StatusTag } from "../components";
 import { useTableSelection } from "../hooks/useTableSelection";
+import {
+  canManageGlobalSettings,
+  canManageProjectResource,
+  canWriteAnyResource,
+  getAccessibleProjectIds,
+  isProjectScopedUser,
+  isReadOnlyUser,
+  type CurrentUser,
+} from "../permissions";
 import type { MailboxRecord, MailboxSyncResult, WorkspaceCatalog } from "../types";
 import { buildBatchActionMessage, formatDateTime, loadAllPages, normalizeApiError, randomLocalPart, runBatchAction } from "../utils";
 
 interface MailboxesPageProps {
+  currentUser?: CurrentUser;
   domains: string[];
   mailboxDomain: string;
   onMailboxesChanged?: () => Promise<void> | void;
@@ -47,6 +57,7 @@ const EMPTY_CATALOG: WorkspaceCatalog = {
 };
 
 export default function MailboxesPage({
+  currentUser,
   domains,
   mailboxDomain,
   onMailboxesChanged,
@@ -71,6 +82,11 @@ export default function MailboxesPage({
   const [editing, setEditing] = useState<MailboxRecord | null>(null);
   const watchedProjectId = Form.useWatch("project_id", form);
   const watchedEnvironmentId = Form.useWatch("environment_id", form);
+  const canWriteMailboxes = canWriteAnyResource(currentUser);
+  const canSyncRoutes = canManageGlobalSettings(currentUser);
+  const isProjectScoped = isProjectScopedUser(currentUser);
+  const isViewer = isReadOnlyUser(currentUser);
+  const accessibleProjectIds = useMemo(() => getAccessibleProjectIds(currentUser), [currentUser]);
 
   useEffect(() => {
     void loadData();
@@ -84,6 +100,7 @@ export default function MailboxesPage({
       try {
         const payload = await getDomains({
           environment_id: watchedEnvironmentId,
+          purpose: "mailbox_create",
           project_id: watchedProjectId,
         });
         if (disposed) return;
@@ -114,7 +131,11 @@ export default function MailboxesPage({
   async function loadData() {
     setLoading(true);
     try {
-      await performSync(false);
+      if (canSyncRoutes) {
+        await performSync(false);
+      } else {
+        setSyncSummary(null);
+      }
       const [items, workspaceCatalog] = await Promise.all([
         loadAllPages(page => getMailboxes(page, false)),
         getWorkspaceCatalog(true),
@@ -176,6 +197,7 @@ export default function MailboxesPage({
     setEditing(null);
     setAvailableDomains(domains);
     setPreferredDomain(mailboxDomain);
+    const defaultProjectId = isProjectScoped ? accessibleProjectIds[0] : undefined;
     form.setFieldsValue({
       batch_count: 1,
       domain: mailboxDomain || domains[0] || "",
@@ -185,7 +207,7 @@ export default function MailboxesPage({
       local_part: "",
       mailbox_pool_id: undefined,
       note: "",
-      project_id: undefined,
+      project_id: defaultProjectId,
       tags: "",
     });
     setDrawerOpen(true);
@@ -289,24 +311,42 @@ export default function MailboxesPage({
     rowSelection,
     selectedItems,
   } = useTableSelection(filteredMailboxes, "id");
+  const mailboxRowSelection = useMemo(
+    () => (canWriteMailboxes ? {
+      ...rowSelection,
+      getCheckboxProps: (record: MailboxRecord) => ({
+        disabled: !canManageMailboxRecord(record),
+      }),
+    } : undefined),
+    [canWriteMailboxes, currentUser, rowSelection],
+  );
 
   const projectOptions = useMemo(
-    () => catalog.projects.map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id })),
-    [catalog.projects],
+    () =>
+      catalog.projects
+        .filter(item => !isProjectScoped || accessibleProjectIds.includes(item.id))
+        .map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id })),
+    [accessibleProjectIds, catalog.projects, isProjectScoped],
   );
   const environmentOptions = useMemo(
     () => catalog.environments
+      .filter(item => !isProjectScoped || accessibleProjectIds.includes(item.project_id))
       .filter(item => !watchedProjectId || item.project_id === watchedProjectId)
       .map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id })),
-    [catalog.environments, watchedProjectId],
+    [accessibleProjectIds, catalog.environments, isProjectScoped, watchedProjectId],
   );
   const mailboxPoolOptions = useMemo(
     () => catalog.mailbox_pools
+      .filter(item => !isProjectScoped || accessibleProjectIds.includes(item.project_id))
       .filter(item => !watchedProjectId || item.project_id === watchedProjectId)
       .filter(item => !watchedEnvironmentId || item.environment_id === watchedEnvironmentId)
       .map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id })),
-    [catalog.mailbox_pools, watchedEnvironmentId, watchedProjectId],
+    [accessibleProjectIds, catalog.mailbox_pools, isProjectScoped, watchedEnvironmentId, watchedProjectId],
   );
+
+  function canManageMailboxRecord(record: Pick<MailboxRecord, "project_id">) {
+    return canManageProjectResource(currentUser, record.project_id);
+  }
 
   function buildMailboxUpdatePayload(record: MailboxRecord, is_enabled: boolean) {
     const [local_part = "", domain = domains[0] || mailboxDomain] = record.address.split("@");
@@ -426,22 +466,56 @@ export default function MailboxesPage({
       key: "action",
       width: 180,
       render: (_value, record) => (
-        <ActionButtons
-          onEdit={() => openEditDrawer(record)}
-          onDelete={() => void handleDelete(record.id)}
-          extra={(
-            <Button type="link" size="small" onClick={() => navigate(`/emails?address=${encodeURIComponent(record.address)}`)}>
-              收件箱
-            </Button>
-          )}
-        />
+        canManageMailboxRecord(record) ? (
+          <ActionButtons
+            onEdit={() => openEditDrawer(record)}
+            onDelete={() => void handleDelete(record.id)}
+            extra={(
+              <Button type="link" size="small" onClick={() => navigate(`/emails?address=${encodeURIComponent(record.address)}`)}>
+                收件箱
+              </Button>
+            )}
+          />
+        ) : (
+          <Button type="link" size="small" onClick={() => navigate(`/emails?address=${encodeURIComponent(record.address)}`)}>
+            收件箱
+          </Button>
+        )
       ),
     },
   ];
 
   return (
     <div>
-      <PageHeader title="邮箱资产" subtitle="创建、批量生成和维护托管邮箱，支持标签与生命周期配置" />
+      <PageHeader
+        title="邮箱资产"
+        subtitle="创建、批量生成和维护托管邮箱，支持标签与生命周期配置"
+        tags={
+          isViewer
+            ? [{ color: "gold", label: "只读视角" }]
+            : isProjectScoped
+              ? [{ color: "gold", label: "项目级视角" }]
+              : undefined
+        }
+      />
+
+      {!canWriteMailboxes ? (
+        <Alert
+          showIcon
+          type="info"
+          message="当前账号为邮箱只读视角"
+          description="你可以查看邮箱资产和进入对应收件箱，但新增、编辑、删除和批量操作入口已关闭。"
+          style={{ marginBottom: 16 }}
+        />
+      ) : isProjectScoped ? (
+        <Alert
+          showIcon
+          type="info"
+          message="当前账号为项目级邮箱视角"
+          description="你只能管理自己已绑定项目下的邮箱资产；全局路由同步按钮已关闭，新增邮箱时也会限制在已绑定项目内。"
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={12} lg={6}>
@@ -486,7 +560,7 @@ export default function MailboxesPage({
                 allowClear
                 placeholder="项目"
                 value={projectFilter}
-                options={catalog.projects.map(item => ({ label: item.is_enabled ? item.name : `${item.name}（已停用）`, value: item.id }))}
+                options={projectOptions}
                 onChange={value => {
                   setProjectFilter(value);
                   setEnvironmentFilter(undefined);
@@ -533,10 +607,10 @@ export default function MailboxesPage({
             >
               重置
             </Button>
-            <Button icon={<SyncOutlined />} loading={syncing} onClick={() => void performSync(true)} style={{ borderRadius: 8 }}>
+            <Button icon={<SyncOutlined />} loading={syncing} disabled={!canSyncRoutes} onClick={() => void performSync(true)} style={{ borderRadius: 8 }}>
               同步路由
             </Button>
-            <Button type="primary" onClick={openCreateDrawer}>
+            <Button type="primary" onClick={openCreateDrawer} disabled={!canWriteMailboxes}>
               新增邮箱
             </Button>
           </div>
@@ -545,7 +619,7 @@ export default function MailboxesPage({
 
       <DataTable
         cardTitle="邮箱资产列表"
-        cardToolbar={(
+        cardToolbar={canWriteMailboxes ? (
           <BatchActionsBar selectedCount={selectedItems.length} onClear={clearSelection}>
             <Button onClick={() => void handleBatchToggle(true)}>
               批量启用
@@ -562,107 +636,113 @@ export default function MailboxesPage({
               </Button>
             </Popconfirm>
           </BatchActionsBar>
-        )}
+        ) : undefined}
         columns={columns}
         dataSource={filteredMailboxes}
         loading={loading}
-        rowSelection={rowSelection}
+        rowSelection={mailboxRowSelection}
         rowKey="id"
         pageSize={10}
       />
 
-      <FormDrawer
-        title={editing ? "编辑邮箱" : "新增邮箱"}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        onSubmit={() => void handleSubmit()}
-        form={form}
-        loading={saving}
-      >
-        <Col span={24}>
-          <Form.Item label="本地部分" name="local_part" extra="留空时自动生成随机前缀">
-            <Input
-              placeholder="例如：openai-login"
-              addonAfter={(
-                <Button type="link" style={{ paddingInline: 0 }} onClick={() => form.setFieldValue("local_part", randomLocalPart())}>
-                  随机
-                </Button>
-              )}
-            />
-          </Form.Item>
-        </Col>
-        {!editing ? (
+      {canWriteMailboxes ? (
+        <FormDrawer
+          title={editing ? "编辑邮箱" : "新增邮箱"}
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={() => void handleSubmit()}
+          form={form}
+          loading={saving}
+        >
           <Col span={24}>
-            <Form.Item label="批量数量" name="batch_count" initialValue={1}>
-              <Input type="number" min={1} max={50} />
+            <Form.Item label="本地部分" name="local_part" extra="留空时自动生成随机前缀">
+              <Input
+                placeholder="例如：openai-login"
+                addonAfter={(
+                  <Button type="link" style={{ paddingInline: 0 }} onClick={() => form.setFieldValue("local_part", randomLocalPart())}>
+                    随机
+                  </Button>
+                )}
+              />
             </Form.Item>
           </Col>
-        ) : null}
-        <Col span={24}>
-          <Form.Item label="域名" name="domain" rules={[{ required: true, message: "请选择域名" }]}>
-            <Select
-              showSearch
-              options={domainOptions}
-              placeholder="选择已接入域名"
-              optionFilterProp="label"
-            />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="项目" name="project_id">
-            <Select
-              allowClear
-              options={projectOptions}
-              placeholder="可选，未选择则为未归属邮箱"
-              onChange={() => {
-                form.setFieldValue("environment_id", undefined);
-                form.setFieldValue("mailbox_pool_id", undefined);
-              }}
-            />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="环境" name="environment_id">
-            <Select
-              allowClear
-              options={environmentOptions}
-              placeholder={watchedProjectId ? "选择环境" : "请先选择项目"}
-              disabled={!watchedProjectId}
-              onChange={() => form.setFieldValue("mailbox_pool_id", undefined)}
-            />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="邮箱池" name="mailbox_pool_id">
-            <Select
-              allowClear
-              options={mailboxPoolOptions}
-              placeholder={watchedEnvironmentId ? "选择邮箱池" : "请先选择环境"}
-              disabled={!watchedEnvironmentId}
-            />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="备注" name="note">
-            <Input placeholder="例如：GitHub 登录测试" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="标签" name="tags" extra="多个标签用逗号分隔">
-            <Input placeholder="例如：github, login, ci" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="到期时间" name="expires_at">
-            <DatePicker showTime style={{ width: "100%" }} />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
-            <Switch checkedChildren="启用" unCheckedChildren="停用" />
-          </Form.Item>
-        </Col>
-      </FormDrawer>
+          {!editing ? (
+            <Col span={24}>
+              <Form.Item label="批量数量" name="batch_count" initialValue={1}>
+                <Input type="number" min={1} max={50} />
+              </Form.Item>
+            </Col>
+          ) : null}
+          <Col span={24}>
+            <Form.Item label="域名" name="domain" rules={[{ required: true, message: "请选择域名" }]}>
+              <Select
+                showSearch
+                options={domainOptions}
+                placeholder="选择已接入域名"
+                optionFilterProp="label"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item
+              label="项目"
+              name="project_id"
+              rules={isProjectScoped ? [{ required: true, message: "项目级管理员必须选择已绑定项目" }] : []}
+            >
+              <Select
+                allowClear={!isProjectScoped}
+                options={projectOptions}
+                placeholder={isProjectScoped ? "请选择已绑定项目" : "可选，未选择则为未归属邮箱"}
+                onChange={() => {
+                  form.setFieldValue("environment_id", undefined);
+                  form.setFieldValue("mailbox_pool_id", undefined);
+                }}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="环境" name="environment_id">
+              <Select
+                allowClear
+                options={environmentOptions}
+                placeholder={watchedProjectId ? "选择环境" : "请先选择项目"}
+                disabled={!watchedProjectId}
+                onChange={() => form.setFieldValue("mailbox_pool_id", undefined)}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="邮箱池" name="mailbox_pool_id">
+              <Select
+                allowClear
+                options={mailboxPoolOptions}
+                placeholder={watchedEnvironmentId ? "选择邮箱池" : "请先选择环境"}
+                disabled={!watchedEnvironmentId}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="备注" name="note">
+              <Input placeholder="例如：GitHub 登录测试" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="标签" name="tags" extra="多个标签用逗号分隔">
+              <Input placeholder="例如：github, login, ci" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="到期时间" name="expires_at">
+              <DatePicker showTime style={{ width: "100%" }} />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+        </FormDrawer>
+      ) : null}
     </div>
   );
 }

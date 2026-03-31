@@ -1,14 +1,16 @@
-import { App, Button, Col, Form, Input, Popconfirm, Row, Switch } from "antd";
+import { Alert, App, Button, Col, Form, Input, Popconfirm, Row, Switch } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo, useState } from "react";
 
 import { createRule, getRules, removeRule, testRules, updateRule } from "../api";
 import { ActionButtons, BatchActionsBar, DataTable, DetailDrawer, FormDrawer, MetricCard, PageHeader, SearchToolbar, StatusTag } from "../components";
 import { useTableSelection } from "../hooks/useTableSelection";
+import { canManageGlobalSettings, getReadonlyNotice, type CurrentUser } from "../permissions";
 import type { RuleMatch, RuleMutationPayload, RuleRecord, RuleTestResult } from "../types";
 import { buildBatchActionMessage, formatDateTime, loadAllPages, normalizeApiError, runBatchAction } from "../utils";
 
 interface RulesPageProps {
+  currentUser?: CurrentUser;
   onUnauthorized: () => void;
 }
 
@@ -19,7 +21,7 @@ const INITIAL_VALUES: RuleMutationPayload = {
   sender_filter: "",
 };
 
-export default function RulesPage({ onUnauthorized }: RulesPageProps) {
+export default function RulesPage({ currentUser, onUnauthorized }: RulesPageProps) {
   const { message } = App.useApp();
   const [form] = Form.useForm<RuleMutationPayload>();
   const [testerForm] = Form.useForm<{ content: string; sender: string }>();
@@ -32,6 +34,8 @@ export default function RulesPage({ onUnauthorized }: RulesPageProps) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<RuleTestResult | null>(null);
   const [editing, setEditing] = useState<RuleRecord | null>(null);
+  const canManageRules = canManageGlobalSettings(currentUser);
+  const readonlyNotice = getReadonlyNotice(currentUser, "规则管理");
 
   useEffect(() => {
     void loadRules();
@@ -223,7 +227,11 @@ export default function RulesPage({ onUnauthorized }: RulesPageProps) {
       key: "action",
       width: 140,
       render: (_value, record) => (
-        <ActionButtons onEdit={() => openEditDrawer(record)} onDelete={() => void handleDelete(record.id)} />
+        canManageRules ? (
+          <ActionButtons onEdit={() => openEditDrawer(record)} onDelete={() => void handleDelete(record.id)} />
+        ) : (
+          <span style={{ color: "#999" }}>只读</span>
+        )
       ),
     },
   ];
@@ -251,7 +259,21 @@ export default function RulesPage({ onUnauthorized }: RulesPageProps) {
 
   return (
     <div>
-      <PageHeader title="规则管理" subtitle="维护提取规则，并可直接输入样例内容验证命中结果" />
+      <PageHeader
+        title="规则管理"
+        subtitle="维护提取规则，并可直接输入样例内容验证命中结果"
+        tags={canManageRules ? undefined : [{ color: "gold", label: "只读视角" }]}
+      />
+
+      {readonlyNotice ? (
+        <Alert
+          showIcon
+          type="info"
+          message={readonlyNotice.title}
+          description={readonlyNotice.description}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={12} lg={8}>
@@ -271,7 +293,7 @@ export default function RulesPage({ onUnauthorized }: RulesPageProps) {
           searchValue={searchText}
           onSearchChange={value => setSearchText(value)}
           onReset={() => setSearchText("")}
-          onAdd={openCreateDrawer}
+          onAdd={canManageRules ? openCreateDrawer : undefined}
           addText="新增规则"
           extra={(
             <Button onClick={() => setTesterOpen(true)}>
@@ -283,7 +305,7 @@ export default function RulesPage({ onUnauthorized }: RulesPageProps) {
 
       <DataTable
         cardTitle="规则列表"
-        cardToolbar={(
+        cardToolbar={canManageRules ? (
           <BatchActionsBar selectedCount={selectedItems.length} onClear={clearSelection}>
             <Button onClick={() => void handleBatchToggle(true)}>
               批量启用
@@ -300,44 +322,46 @@ export default function RulesPage({ onUnauthorized }: RulesPageProps) {
               </Button>
             </Popconfirm>
           </BatchActionsBar>
-        )}
+        ) : undefined}
         columns={columns}
         dataSource={filteredRules}
         loading={loading}
-        rowSelection={rowSelection}
+        rowSelection={canManageRules ? rowSelection : undefined}
         rowKey="id"
         pageSize={10}
       />
 
-      <FormDrawer
-        title={editing ? "编辑规则" : "新增规则"}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        onSubmit={() => void handleSubmit()}
-        form={form}
-        loading={saving}
-      >
-        <Col span={24}>
-          <Form.Item label="规则备注" name="remark">
-            <Input placeholder="例如：GitHub 六位验证码" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="发件人过滤" name="sender_filter">
-            <Input.TextArea rows={4} placeholder="例如：notifications@github\\.com$" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="正文正则" name="pattern" rules={[{ required: true, message: "请输入正文正则" }]}>
-            <Input.TextArea rows={6} placeholder={"例如：\\b\\d{6}\\b"} />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
-            <Switch checkedChildren="启用" unCheckedChildren="停用" />
-          </Form.Item>
-        </Col>
-      </FormDrawer>
+      {canManageRules ? (
+        <FormDrawer
+          title={editing ? "编辑规则" : "新增规则"}
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={() => void handleSubmit()}
+          form={form}
+          loading={saving}
+        >
+          <Col span={24}>
+            <Form.Item label="规则备注" name="remark">
+              <Input placeholder="例如：GitHub 六位验证码" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="发件人过滤" name="sender_filter">
+              <Input.TextArea rows={4} placeholder="例如：notifications@github\\.com$" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="正文正则" name="pattern" rules={[{ required: true, message: "请输入正文正则" }]}>
+              <Input.TextArea rows={6} placeholder={"例如：\\b\\d{6}\\b"} />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+        </FormDrawer>
+      ) : null}
 
       <DetailDrawer
         title="规则测试器"

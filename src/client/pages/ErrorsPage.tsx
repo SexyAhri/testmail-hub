@@ -9,19 +9,21 @@ import {
   SearchOutlined,
   SendOutlined,
 } from "@ant-design/icons";
-import { App, Button, Descriptions, Input, Select, Space, Tag, Typography } from "antd";
+import { Alert, App, Button, Descriptions, Input, Select, Space, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { getErrorEvents } from "../api";
 import { DataTable, DetailDrawer, MetricCard, MetricGrid, PageHeader, SearchToolbar } from "../components";
+import { canManageGlobalSettings, isProjectScopedUser, isReadOnlyUser, type CurrentUser } from "../permissions";
 import type { ErrorEventsPayload, ErrorEventRecord, ErrorEventSummary } from "../types";
 import { formatDateTime, normalizeApiError } from "../utils";
 
 const { Paragraph, Text } = Typography;
 
 interface ErrorsPageProps {
+  currentUser?: CurrentUser;
   onUnauthorized: () => void;
 }
 
@@ -102,7 +104,7 @@ async function copyText(text: string) {
   document.body.removeChild(textArea);
 }
 
-export default function ErrorsPage({ onUnauthorized }: ErrorsPageProps) {
+export default function ErrorsPage({ currentUser, onUnauthorized }: ErrorsPageProps) {
   const { message } = App.useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
@@ -114,6 +116,9 @@ export default function ErrorsPage({ onUnauthorized }: ErrorsPageProps) {
   const [detailRecord, setDetailRecord] = useState<ErrorEventRecord | null>(null);
   const [draftKeyword, setDraftKeyword] = useState(searchParams.get("keyword") || "");
   const [draftSource, setDraftSource] = useState<string | undefined>(normalizeSearchValue(searchParams.get("source")));
+  const canAccessSystemErrors = canManageGlobalSettings(currentUser);
+  const isReadOnly = isReadOnlyUser(currentUser);
+  const isProjectScoped = isProjectScopedUser(currentUser);
 
   const currentPage = useMemo(() => getCurrentPage(searchParams.get("page")), [searchParams]);
   const activeKeyword = useMemo(() => normalizeSearchValue(searchParams.get("keyword")), [searchParams]);
@@ -125,8 +130,9 @@ export default function ErrorsPage({ onUnauthorized }: ErrorsPageProps) {
   }, [searchParams]);
 
   useEffect(() => {
+    if (!canAccessSystemErrors) return;
     void loadData();
-  }, [searchParams]);
+  }, [canAccessSystemErrors, searchParams]);
 
   async function loadData() {
     setLoading(true);
@@ -241,14 +247,32 @@ export default function ErrorsPage({ onUnauthorized }: ErrorsPageProps) {
         tags={[
           { color: "blue", label: `来源 ${summary.unique_sources}` },
           { color: "magenta", label: `最近异常 ${latestTag}` },
+          ...(!canAccessSystemErrors ? [{ color: "gold", label: "受限视角" }] : []),
         ]}
         extra={(
-          <Button icon={<ReloadOutlined />} onClick={() => void loadData()}>
+          <Button icon={<ReloadOutlined />} disabled={!canAccessSystemErrors} onClick={() => void loadData()}>
             刷新日志
           </Button>
         )}
       />
 
+      {!canAccessSystemErrors ? (
+        <Alert
+          showIcon
+          type="warning"
+          message="当前账号不能访问系统日志"
+          description={
+            isReadOnly
+              ? "只读角色暂不开放系统日志读取权限。"
+              : isProjectScoped
+                ? "项目级管理员不能查看全平台系统日志。"
+                : "当前账号没有权限访问系统日志。"
+          }
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
+
+      {canAccessSystemErrors ? (
       <MetricGrid minItemWidth={220}>
         <MetricCard
           title="当前筛选异常数"
@@ -286,7 +310,9 @@ export default function ErrorsPage({ onUnauthorized }: ErrorsPageProps) {
           color="#13c2c2"
         />
       </MetricGrid>
+      ) : null}
 
+      {canAccessSystemErrors ? (
       <div style={{ marginBottom: 16 }}>
         <SearchToolbar>
           <div
@@ -329,7 +355,9 @@ export default function ErrorsPage({ onUnauthorized }: ErrorsPageProps) {
           </div>
         </SearchToolbar>
       </div>
+      ) : null}
 
+      {canAccessSystemErrors ? (
       <DataTable
         cardTitle="错误事件列表"
         cardToolbar={(
@@ -351,6 +379,7 @@ export default function ErrorsPage({ onUnauthorized }: ErrorsPageProps) {
         pageSize={pageSize}
         onPageChange={nextPage => applyFilters(nextPage)}
       />
+      ) : null}
 
       <DetailDrawer
         title={detailRecord ? `日志详情 #${detailRecord.id}` : "日志详情"}

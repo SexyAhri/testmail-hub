@@ -14,6 +14,7 @@ const ApiDocsPage = lazy(() => import("./pages/ApiDocsPage"));
 const ApiTokensPage = lazy(() => import("./pages/ApiTokensPage"));
 const AdminsPage = lazy(() => import("./pages/AdminsPage"));
 const AuditLogsPage = lazy(() => import("./pages/AuditLogsPage"));
+const ArchivesPage = lazy(() => import("./pages/ArchivesPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const DomainsPage = lazy(() => import("./pages/DomainsPage"));
 const EmailDetailPage = lazy(() => import("./pages/EmailDetailPage"));
@@ -24,6 +25,7 @@ const MailboxesPage = lazy(() => import("./pages/MailboxesPage"));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
 const OutboundEmailsPage = lazy(() => import("./pages/OutboundEmailsPage"));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
+const RetentionPoliciesPage = lazy(() => import("./pages/RetentionPoliciesPage"));
 const RulesPage = lazy(() => import("./pages/RulesPage"));
 const TrashPage = lazy(() => import("./pages/TrashPage"));
 const WhitelistPage = lazy(() => import("./pages/WhitelistPage"));
@@ -31,14 +33,16 @@ const WhitelistPage = lazy(() => import("./pages/WhitelistPage"));
 type AuthStatus = "authenticated" | "guest" | "loading";
 
 function getBreadcrumbs(pathname: string) {
-  const items: Array<{ path?: string; title: string }> = [{ title: "首页", path: "/monitor" }];
+  const items: Array<{ path?: string; title: string }> = [{ path: "/monitor", title: "首页" }];
 
   if (pathname.startsWith("/monitor")) items.push({ title: "监控中心" });
   if (pathname.startsWith("/projects")) items.push({ title: "项目空间" });
   if (pathname.startsWith("/domains")) items.push({ title: "域名资产" });
-  if (pathname.startsWith("/emails/")) items.push({ title: "邮件中心", path: "/emails" }, { title: "邮件详情" });
+  if (pathname.startsWith("/emails/")) items.push({ path: "/emails", title: "邮件中心" }, { title: "邮件详情" });
   if (pathname === "/emails") items.push({ title: "邮件中心" });
+  if (pathname.startsWith("/archives")) items.push({ title: "归档中心" });
   if (pathname.startsWith("/trash")) items.push({ title: "回收站" });
+  if (pathname.startsWith("/retention")) items.push({ title: "生命周期策略" });
   if (pathname.startsWith("/rules")) items.push({ title: "规则管理" });
   if (pathname.startsWith("/whitelist")) items.push({ title: "白名单" });
   if (pathname.startsWith("/mailboxes")) items.push({ title: "邮箱资产" });
@@ -73,7 +77,7 @@ function DashboardShell({
   const { token } = theme.useToken();
   const location = useLocation();
   const navigate = useNavigate();
-  const sidebarItems = useMemo(() => buildDefaultSidebarItems(), []);
+  const sidebarItems = useMemo(() => buildDefaultSidebarItems(user), [user]);
 
   return (
     <Layout style={{ minHeight: "100vh", background: token.colorBgLayout }}>
@@ -85,26 +89,41 @@ function DashboardShell({
           onNavigate={path => navigate(path)}
           username={user?.display_name || user?.username || "Admin"}
         />
-        <Content style={{ padding: 10, background: token.colorBgContainer, borderRadius: token.borderRadius, minHeight: 280 }}>
-          <Suspense fallback={<div style={{ padding: 80, textAlign: "center" }}><Spin size="large" /></div>}>
+        <Content
+          style={{
+            padding: 10,
+            background: token.colorBgContainer,
+            borderRadius: token.borderRadius,
+            minHeight: 280,
+          }}
+        >
+          <Suspense
+            fallback={(
+              <div style={{ padding: 80, textAlign: "center" }}>
+                <Spin size="large" />
+              </div>
+            )}
+          >
             <div key={location.pathname} className="page-content">
               <Routes>
                 <Route path="/" element={<Navigate to="/monitor" replace />} />
                 <Route path="/monitor" element={<DashboardPage domains={domains} mailboxDomain={mailboxDomain} onUnauthorized={onUnauthorized} />} />
-                <Route path="/projects" element={<ProjectsPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/domains" element={<DomainsPage onDomainsChanged={onMailboxesChanged} onUnauthorized={onUnauthorized} />} />
+                <Route path="/projects" element={<ProjectsPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/domains" element={<DomainsPage currentUser={user} onDomainsChanged={onMailboxesChanged} onUnauthorized={onUnauthorized} />} />
                 <Route path="/emails" element={<EmailsPage domains={domains} onUnauthorized={onUnauthorized} />} />
                 <Route path="/emails/:messageId" element={<EmailDetailPage onUnauthorized={onUnauthorized} />} />
+                <Route path="/archives" element={<ArchivesPage onUnauthorized={onUnauthorized} />} />
                 <Route path="/trash" element={<TrashPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/rules" element={<RulesPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/whitelist" element={<WhitelistPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/mailboxes" element={<MailboxesPage domains={domains} mailboxDomain={mailboxDomain} onMailboxesChanged={onMailboxesChanged} onUnauthorized={onUnauthorized} />} />
-                <Route path="/outbound" element={<OutboundEmailsPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/admins" element={<AdminsPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/notifications" element={<NotificationsPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/api-tokens" element={<ApiTokensPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/system/audit" element={<AuditLogsPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/system/errors" element={<ErrorsPage onUnauthorized={onUnauthorized} />} />
+                <Route path="/retention" element={<RetentionPoliciesPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/rules" element={<RulesPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/whitelist" element={<WhitelistPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/mailboxes" element={<MailboxesPage currentUser={user} domains={domains} mailboxDomain={mailboxDomain} onMailboxesChanged={onMailboxesChanged} onUnauthorized={onUnauthorized} />} />
+                <Route path="/outbound" element={<OutboundEmailsPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/admins" element={<AdminsPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/notifications" element={<NotificationsPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/api-tokens" element={<ApiTokensPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/system/audit" element={<AuditLogsPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/system/errors" element={<ErrorsPage currentUser={user} onUnauthorized={onUnauthorized} />} />
                 <Route path="/api" element={<ApiDocsPage mailboxDomain={mailboxDomain} />} />
                 <Route path="*" element={<Navigate to="/monitor" replace />} />
               </Routes>
@@ -207,7 +226,15 @@ export default function App() {
 
   if (authStatus === "loading") {
     return (
-      <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: token.colorBgLayout }}>
+      <div
+        style={{
+          height: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: token.colorBgLayout,
+        }}
+      >
         <Spin size="large" />
       </div>
     );
@@ -215,7 +242,13 @@ export default function App() {
 
   if (authStatus === "guest") {
     return (
-      <Suspense fallback={<div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}><Spin size="large" /></div>}>
+      <Suspense
+        fallback={(
+          <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Spin size="large" />
+          </div>
+        )}
+      >
         <LoginPage loading={loginLoading} onLogin={handleLogin} />
       </Suspense>
     );

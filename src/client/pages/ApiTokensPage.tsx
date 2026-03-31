@@ -3,7 +3,7 @@ import {
   KeyOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
-import { App, Button, Col, DatePicker, Form, Input, Popconfirm, Select, Switch, Tag, Typography } from "antd";
+import { Alert, App, Button, Col, DatePicker, Form, Input, Popconfirm, Select, Switch, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs, { type Dayjs } from "dayjs";
 import { useEffect, useMemo, useState } from "react";
@@ -38,8 +38,16 @@ import {
   normalizeApiError,
   runBatchAction,
 } from "../utils";
+import {
+  canManageProjectResource,
+  canWriteAnyResource,
+  getAccessibleProjectIds,
+  isProjectScopedUser,
+  type CurrentUser,
+} from "../permissions";
 
 interface ApiTokensPageProps {
+  currentUser?: CurrentUser;
   onUnauthorized: () => void;
 }
 
@@ -76,7 +84,7 @@ function formatPermissionLabel(permission: ApiTokenPermission) {
   return PERMISSION_LABELS.get(permission) || permission;
 }
 
-export default function ApiTokensPage({ onUnauthorized }: ApiTokensPageProps) {
+export default function ApiTokensPage({ currentUser, onUnauthorized }: ApiTokensPageProps) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<ApiTokenFormValues>();
   const watchedAccessScope = Form.useWatch("access_scope", form);
@@ -87,6 +95,9 @@ export default function ApiTokensPage({ onUnauthorized }: ApiTokensPageProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<ApiTokenRecord | null>(null);
   const { clearSelection, rowSelection, selectedItems } = useTableSelection(items, "id");
+  const canManageTokens = canWriteAnyResource(currentUser);
+  const isProjectScoped = isProjectScopedUser(currentUser);
+  const accessibleProjectIds = useMemo(() => getAccessibleProjectIds(currentUser), [currentUser]);
 
   const boundCount = useMemo(
     () => items.filter(item => item.access_scope === "bound").length,
@@ -98,8 +109,9 @@ export default function ApiTokensPage({ onUnauthorized }: ApiTokensPageProps) {
   );
 
   useEffect(() => {
+    if (!canManageTokens) return;
     void loadData();
-  }, []);
+  }, [canManageTokens]);
 
   async function loadData() {
     setLoading(true);
@@ -123,7 +135,11 @@ export default function ApiTokensPage({ onUnauthorized }: ApiTokensPageProps) {
 
   function openCreate() {
     setEditing(null);
-    form.setFieldsValue(INITIAL_VALUES);
+    form.setFieldsValue({
+      ...INITIAL_VALUES,
+      access_scope: isProjectScoped ? "bound" : INITIAL_VALUES.access_scope,
+      project_ids: isProjectScoped ? accessibleProjectIds : [],
+    });
     setDrawerOpen(true);
   }
 
@@ -254,6 +270,28 @@ export default function ApiTokensPage({ onUnauthorized }: ApiTokensPageProps) {
     }
   }
 
+  const visibleProjects = useMemo(
+    () => projects.filter(project => !isProjectScoped || accessibleProjectIds.includes(project.id)),
+    [accessibleProjectIds, isProjectScoped, projects],
+  );
+
+  function canManageTokenRecord(record: ApiTokenRecord) {
+    if (!canManageTokens) return false;
+    if (!isProjectScoped) return true;
+    if (record.access_scope === "all") return false;
+    return record.projects.some(project => accessibleProjectIds.includes(project.id));
+  }
+
+  const tokenRowSelection = useMemo(
+    () => (canManageTokens ? {
+      ...rowSelection,
+      getCheckboxProps: (record: ApiTokenRecord) => ({
+        disabled: !canManageTokenRecord(record),
+      }),
+    } : undefined),
+    [canManageTokens, rowSelection, accessibleProjectIds, isProjectScoped],
+  );
+
   const columns: ColumnsType<ApiTokenRecord> = [
     { title: "名称", dataIndex: "name", key: "name", width: 180 },
     {
@@ -321,10 +359,14 @@ export default function ApiTokensPage({ onUnauthorized }: ApiTokensPageProps) {
       title: "操作",
       key: "action",
       render: (_, record) => (
-        <ActionButtons
-          onEdit={() => openEdit(record)}
-          onDelete={() => void handleDelete(record.id)}
-        />
+        canManageTokenRecord(record) ? (
+          <ActionButtons
+            onEdit={() => openEdit(record)}
+            onDelete={() => void handleDelete(record.id)}
+          />
+        ) : (
+          <span style={{ color: "#999" }}>只读</span>
+        )
       ),
       width: 120,
       fixed: "right",
@@ -336,12 +378,23 @@ export default function ApiTokensPage({ onUnauthorized }: ApiTokensPageProps) {
       <PageHeader
         title="API Token"
         subtitle="为自动化脚本签发全局或项目级访问令牌，支持权限拆分、过期时间和批量启停。"
-        extra={(
+        extra={canManageTokens ? (
           <Button type="primary" onClick={openCreate}>
             新建 Token
           </Button>
-        )}
+        ) : undefined}
+        tags={canManageTokens ? (isProjectScoped ? [{ color: "gold", label: "项目级视角" }] : undefined) : [{ color: "gold", label: "受限视角" }]}
       />
+
+      {!canManageTokens ? (
+        <Alert
+          showIcon
+          type="warning"
+          message="当前账号不能查看或管理 API Token"
+          description="API Token 属于自动化接入凭证，当前只对可写管理员开放。只读角色不会显示签发与维护入口。"
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
         项目绑定 Token 只能访问被授权项目下的邮件、提取结果和附件。新建成功后，完整 Token 只会展示一次。
@@ -373,7 +426,7 @@ export default function ApiTokensPage({ onUnauthorized }: ApiTokensPageProps) {
 
       <DataTable
         cardTitle="Token 列表"
-        cardToolbar={(
+        cardToolbar={canManageTokens ? (
           <BatchActionsBar selectedCount={selectedItems.length} onClear={clearSelection}>
             <Button onClick={() => void handleBatchToggle(true)}>
               批量启用
@@ -390,85 +443,88 @@ export default function ApiTokensPage({ onUnauthorized }: ApiTokensPageProps) {
               </Button>
             </Popconfirm>
           </BatchActionsBar>
-        )}
+        ) : undefined}
         columns={columns}
         dataSource={items}
         loading={loading}
-        rowSelection={rowSelection}
+        rowSelection={tokenRowSelection}
         rowKey="id"
         pageSize={10}
       />
 
-      <FormDrawer
-        title={editing ? "编辑 API Token" : "新建 API Token"}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        onSubmit={() => void handleSubmit()}
-        form={form}
-        loading={saving}
-      >
-        <Col span={24}>
-          <Form.Item label="名称" name="name" rules={[{ required: true, message: "请输入名称" }]}>
-            <Input placeholder="例如：Playwright Staging Token" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="说明" name="description">
-            <Input.TextArea rows={3} placeholder="描述这个 Token 的用途" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item
-            label="访问范围"
-            name="access_scope"
-            rules={[{ required: true, message: "请选择访问范围" }]}
-          >
-            <Select
-              options={[
-                { label: "全局", value: "all" },
-                { label: "项目绑定", value: "bound" },
-              ]}
-            />
-          </Form.Item>
-        </Col>
-        {watchedAccessScope === "bound" ? (
+      {canManageTokens ? (
+        <FormDrawer
+          title={editing ? "编辑 API Token" : "新建 API Token"}
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={() => void handleSubmit()}
+          form={form}
+          loading={saving}
+        >
+          <Col span={24}>
+            <Form.Item label="名称" name="name" rules={[{ required: true, message: "请输入名称" }]}>
+              <Input placeholder="例如：Playwright Staging Token" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="说明" name="description">
+              <Input.TextArea rows={3} placeholder="描述这个 Token 的用途" />
+            </Form.Item>
+          </Col>
           <Col span={24}>
             <Form.Item
-              label="绑定项目"
-              name="project_ids"
-              rules={[{ required: true, message: "请至少选择一个项目" }]}
+              label="访问范围"
+              name="access_scope"
+              rules={[{ required: true, message: "请选择访问范围" }]}
             >
               <Select
-                mode="multiple"
-                options={projects.map(project => ({
-                  label: project.name,
-                  value: project.id,
-                }))}
-                placeholder="限制 Token 只能访问这些项目"
+                disabled={isProjectScoped}
+                options={[
+                  { label: "全局", value: "all" },
+                  { label: "项目绑定", value: "bound" },
+                ]}
               />
             </Form.Item>
           </Col>
-        ) : null}
-        <Col span={24}>
-          <Form.Item
-            label="权限"
-            name="permissions"
-            rules={[{ required: true, message: "请至少选择一个权限" }]}
-          >
-            <Select mode="multiple" options={PERMISSION_OPTIONS} />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="过期时间" name="expires_at">
-            <DatePicker showTime style={{ width: "100%" }} placeholder="留空则不过期" />
-          </Form.Item>
-        </Col>
-        <Col span={24}>
-          <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
-            <Switch checkedChildren="启用" unCheckedChildren="停用" />
-          </Form.Item>
-        </Col>
-      </FormDrawer>
+          {watchedAccessScope === "bound" ? (
+            <Col span={24}>
+              <Form.Item
+                label="绑定项目"
+                name="project_ids"
+                rules={[{ required: true, message: "请至少选择一个项目" }]}
+              >
+                <Select
+                  mode="multiple"
+                  options={visibleProjects.map(project => ({
+                    label: project.name,
+                    value: project.id,
+                  }))}
+                  placeholder="限制 Token 只能访问这些项目"
+                />
+              </Form.Item>
+            </Col>
+          ) : null}
+          <Col span={24}>
+            <Form.Item
+              label="权限"
+              name="permissions"
+              rules={[{ required: true, message: "请至少选择一个权限" }]}
+            >
+              <Select mode="multiple" options={PERMISSION_OPTIONS} />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="过期时间" name="expires_at">
+              <DatePicker showTime style={{ width: "100%" }} placeholder="留空则不过期" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="启用状态" name="is_enabled" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+        </FormDrawer>
+      ) : null}
     </div>
   );
 }

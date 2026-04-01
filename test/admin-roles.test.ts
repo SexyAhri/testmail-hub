@@ -220,6 +220,7 @@ test("admin update writes audit detail with previous and next member snapshot", 
       display_name: "新成员名称",
       is_enabled: false,
       note: "新的职责备注",
+      operation_note: "按交接单收缩成员权限",
       project_ids: [1],
       role: "operator",
     }),
@@ -231,6 +232,7 @@ test("admin update writes audit detail with previous and next member snapshot", 
   const payload = JSON.parse(auditDetailJson) as {
     changed_fields: string[];
     next: Record<string, unknown>;
+    operation_note?: string;
     previous: Record<string, unknown>;
   };
 
@@ -243,6 +245,81 @@ test("admin update writes audit detail with previous and next member snapshot", 
   assert.ok(payload.changed_fields.includes("role"));
   assert.ok(payload.changed_fields.includes("is_enabled"));
   assert.ok(payload.changed_fields.includes("note"));
+  assert.equal(payload.operation_note, "按交接单收缩成员权限");
+});
+
+test("admin create writes operation note into audit detail", async () => {
+  let auditDetailJson = "";
+
+  const db: D1Database = {
+    prepare(query: string): D1PreparedStatement {
+      let params: unknown[] = [];
+
+      return {
+        all: async () => {
+          if (query.includes("FROM admin_project_bindings")) {
+            return { results: [] };
+          }
+          return { results: [] };
+        },
+        bind(...values: unknown[]) {
+          params = values;
+          return this;
+        },
+        first: async () => {
+          if (query.includes("FROM admin_users WHERE username = ? LIMIT 1")) {
+            return null;
+          }
+          return null;
+        },
+        run: async () => {
+          if (query.includes("INSERT INTO audit_logs")) {
+            auditDetailJson = String(params[6] || "");
+          }
+          return {};
+        },
+      };
+    },
+  };
+
+  const actor: AuthSession = {
+    access_scope: "all",
+    auth_kind: "admin_user",
+    display_name: "Owner",
+    expires_at: Date.now() + 60_000,
+    project_ids: [],
+    role: "owner",
+    user_agent_hash: "ua",
+    user_id: "owner-1",
+    username: "owner",
+  };
+
+  const request = new Request("https://example.com/admin/admins", {
+    body: JSON.stringify({
+      access_scope: "all",
+      display_name: "值班成员",
+      is_enabled: true,
+      note: "轮值支持",
+      operation_note: "按本周值班计划新增",
+      password: "Password123!",
+      role: "viewer",
+      username: "duty-viewer",
+    }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+
+  const response = await handleAdminAdminsPost(request, db, actor);
+  const payload = JSON.parse(auditDetailJson) as {
+    display_name: string;
+    operation_note?: string;
+    username: string;
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.username, "duty-viewer");
+  assert.equal(payload.display_name, "值班成员");
+  assert.equal(payload.operation_note, "按本周值班计划新增");
 });
 
 test("admin list GET applies server-side filters", async () => {

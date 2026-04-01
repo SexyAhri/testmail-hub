@@ -57,6 +57,7 @@ interface CloudflareCatchAllRule {
 interface CloudflareCredentials {
   apiToken: string;
   mailboxDomain: string;
+  routeForwardTo: string;
   workerName: string;
   zoneId: string;
 }
@@ -85,14 +86,21 @@ export function isCloudflareMailboxRouteConfigConfigured(
 
 export function resolveCloudflareMailboxRouteConfig(
   env: Pick<WorkerEnv, "CLOUDFLARE_API_TOKEN" | "CLOUDFLARE_ZONE_ID" | "MAILBOX_DOMAIN" | "CLOUDFLARE_EMAIL_WORKER">,
-  overrides?: { domain?: string | null; email_worker?: string | null; zone_id?: string | null },
+  overrides?: {
+    api_token?: string | null;
+    domain?: string | null;
+    email_worker?: string | null;
+    mailbox_route_forward_to?: string | null;
+    zone_id?: string | null;
+  },
 ): CloudflareMailboxRouteConfig | null {
-  const apiToken = String(env.CLOUDFLARE_API_TOKEN || "").trim();
+  const apiToken = String(overrides?.api_token || env.CLOUDFLARE_API_TOKEN || "").trim();
   const zoneId = String(overrides?.zone_id || env.CLOUDFLARE_ZONE_ID || "").trim();
   const mailboxDomain = String(overrides?.domain || env.MAILBOX_DOMAIN || "").trim().toLowerCase();
+  const routeForwardTo = normalizeEmailAddress(overrides?.mailbox_route_forward_to);
   const workerName = String(overrides?.email_worker || env.CLOUDFLARE_EMAIL_WORKER || "temp-email-worker").trim();
   if (!apiToken || !zoneId || !mailboxDomain) return null;
-  return { apiToken, mailboxDomain, workerName, zoneId };
+  return { apiToken, mailboxDomain, routeForwardTo, workerName, zoneId };
 }
 
 export function extractCloudflareMailboxCandidates(
@@ -221,7 +229,9 @@ export async function upsertCloudflareMailboxRouteByConfig(
 
   if (existing?.id) {
     const actions = cloneActions(existing.actions);
-    const resolvedActions = actions.length > 0 ? actions : resolveDefaultActions(rules, credentials.workerName);
+    const resolvedActions = actions.length > 0
+      ? actions
+      : resolveDefaultActions(rules, credentials.workerName, credentials.routeForwardTo);
     if (resolvedActions.length === 0) {
       throw new Error("unable to infer Cloudflare email routing action");
     }
@@ -243,7 +253,7 @@ export async function upsertCloudflareMailboxRouteByConfig(
     return "updated";
   }
 
-  const actions = resolveDefaultActions(rules, credentials.workerName);
+  const actions = resolveDefaultActions(rules, credentials.workerName, credentials.routeForwardTo);
   if (actions.length === 0) {
     throw new Error("unable to infer Cloudflare email routing action");
   }
@@ -309,7 +319,7 @@ function resolveCredentials(
   const mailboxDomain = String(env.MAILBOX_DOMAIN || "").trim().toLowerCase();
   const workerName = String(env.CLOUDFLARE_EMAIL_WORKER || "temp-email-worker").trim();
   if (!apiToken || !zoneId || !mailboxDomain) return null;
-  return { apiToken, mailboxDomain, workerName, zoneId };
+  return { apiToken, mailboxDomain, routeForwardTo: "", workerName, zoneId };
 }
 
 async function listCloudflareRoutingRules(
@@ -378,7 +388,12 @@ function targetsMailboxWorker(actions: CloudflareRoutingAction[] | undefined): b
 function resolveDefaultActions(
   rules: CloudflareRoutingRule[],
   workerName: string,
+  routeForwardTo: string,
 ): CloudflareRoutingAction[] {
+  if (routeForwardTo) {
+    return [{ type: "forward", value: [routeForwardTo] }];
+  }
+
   const workerTemplate = rules.find(rule =>
     Array.isArray(rule.actions) &&
     rule.actions.some(action => String(action?.type || "").trim().toLowerCase() === "worker"),

@@ -17,6 +17,7 @@ import type {
   ApiTokenRecord,
   AuditLogRecord,
   DomainAssetRecord,
+  DomainAssetSecretRecord,
   DomainRoutingProfileRecord,
   AuthSession,
   D1Database,
@@ -32,6 +33,9 @@ import type {
   JsonValue,
   MailboxPoolRecord,
   MailboxRecord,
+  MailboxSyncResult,
+  MailboxSyncRunRecord,
+  MailboxSyncRunStatus,
   NotificationEndpointRecord,
   NotificationAlertConfig,
   NotificationDeliveriesPayload,
@@ -51,6 +55,7 @@ import type {
   PaginationPayload,
   ProjectBindingRecord,
   RetentionJobRunRecord,
+  RetentionJobRunSummary,
   ResolvedRetentionPolicy,
   RetentionPolicyRecord,
   RetentionPolicyScopeLevel,
@@ -71,9 +76,12 @@ const DOMAIN_ASSET_SELECT_FIELDS = [
   "d.domain",
   "d.provider",
   "d.allow_new_mailboxes",
+  "d.allow_catch_all_sync",
   "d.allow_mailbox_route_sync",
   "d.zone_id",
   "d.email_worker",
+  "d.mailbox_route_forward_to",
+  "CASE WHEN COALESCE(d.cloudflare_api_token, '') <> '' THEN 1 ELSE 0 END as cloudflare_api_token_configured",
   "d.note",
   "d.is_enabled",
   "d.is_primary",
@@ -93,6 +101,11 @@ const DOMAIN_ASSET_SELECT_FIELDS = [
   "COALESCE(p.slug, '') as project_slug",
   "COALESCE(e.name, '') as environment_name",
   "COALESCE(e.slug, '') as environment_slug",
+].join(", ");
+
+const DOMAIN_ASSET_SECRET_SELECT_FIELDS = [
+  DOMAIN_ASSET_SELECT_FIELDS,
+  "COALESCE(d.cloudflare_api_token, '') as cloudflare_api_token",
 ].join(", ");
 
 const DOMAIN_ROUTING_PROFILE_SELECT_FIELDS = [
@@ -179,6 +192,19 @@ function mapWorkspaceScope(row: DbRow) {
   };
 }
 
+function createEmptyResolvedRetentionPolicy(): ResolvedRetentionPolicy {
+  return {
+    archive_email_hours: null,
+    archive_email_source: null,
+    deleted_email_retention_hours: null,
+    deleted_email_retention_source: null,
+    email_retention_hours: null,
+    email_retention_source: null,
+    mailbox_ttl_hours: null,
+    mailbox_ttl_source: null,
+  };
+}
+
 function mapWorkspaceProject(row: DbRow): WorkspaceProjectRecord {
   return {
     created_at: numberValue(row, "created_at", Date.now()),
@@ -189,6 +215,7 @@ function mapWorkspaceProject(row: DbRow): WorkspaceProjectRecord {
     mailbox_count: numberValue(row, "mailbox_count", 0),
     mailbox_pool_count: numberValue(row, "mailbox_pool_count", 0),
     name: stringValue(row, "name"),
+    resolved_retention: createEmptyResolvedRetentionPolicy(),
     slug: stringValue(row, "slug"),
     updated_at: numberValue(row, "updated_at", Date.now()),
   };
@@ -214,6 +241,7 @@ function mapWorkspaceEnvironment(row: DbRow): WorkspaceEnvironmentRecord {
     project_id: numberValue(row, "project_id"),
     project_name: stringValue(row, "project_name"),
     project_slug: stringValue(row, "project_slug"),
+    resolved_retention: createEmptyResolvedRetentionPolicy(),
     slug: stringValue(row, "slug"),
     updated_at: numberValue(row, "updated_at", Date.now()),
   };
@@ -233,6 +261,7 @@ function mapMailboxPool(row: DbRow): MailboxPoolRecord {
     project_id: numberValue(row, "project_id"),
     project_name: stringValue(row, "project_name"),
     project_slug: stringValue(row, "project_slug"),
+    resolved_retention: createEmptyResolvedRetentionPolicy(),
     slug: stringValue(row, "slug"),
     updated_at: numberValue(row, "updated_at", Date.now()),
   };
@@ -274,6 +303,7 @@ function mapMailbox(row: DbRow): MailboxRecord {
     note: stringValue(row, "note"),
     ...mapWorkspaceScope(row),
     receive_count: numberValue(row, "receive_count", 0),
+    resolved_retention: createEmptyResolvedRetentionPolicy(),
     tags: safeParseJson<string[]>(stringValue(row, "tags", "[]"), []) || [],
     updated_at: numberValue(row, "updated_at", Date.now()),
   };
@@ -329,15 +359,56 @@ function mapRetentionJobRun(row: DbRow): RetentionJobRunRecord {
   };
 }
 
+function mapMailboxSyncRun(row: DbRow): MailboxSyncRunRecord {
+  return {
+    catch_all_enabled: boolValue(row, "catch_all_enabled", false),
+    cloudflare_configured: boolValue(row, "cloudflare_configured", false),
+    cloudflare_routes_total: numberValue(row, "cloudflare_routes_total", 0),
+    created_at: numberValue(row, "created_at", Date.now()),
+    created_count: numberValue(row, "created_count", 0),
+    domain_summaries:
+      safeParseJson<MailboxSyncResult["domain_summaries"]>(stringValue(row, "domain_summaries_json", "[]"), [])
+      || [],
+    duration_ms: nullableNumberValue(row, "duration_ms"),
+    error_message: stringValue(row, "error_message"),
+    finished_at: nullableNumberValue(row, "finished_at"),
+    id: numberValue(row, "id"),
+    observed_total: numberValue(row, "observed_total", 0),
+    requested_by: stringValue(row, "requested_by"),
+    skipped_count: numberValue(row, "skipped_count", 0),
+    started_at: numberValue(row, "started_at", Date.now()),
+    status: stringValue(row, "status", "pending") as MailboxSyncRunStatus,
+    trigger_source: stringValue(row, "trigger_source", "manual"),
+    updated_at: numberValue(row, "updated_at", numberValue(row, "created_at", Date.now())),
+    updated_count: numberValue(row, "updated_count", 0),
+  };
+}
+
+function mapRetentionJobRunSummaryLastRun(row: DbRow | null): RetentionJobRunSummary["last_run"] {
+  if (!row) return null;
+
+  return {
+    duration_ms: nullableNumberValue(row, "duration_ms"),
+    finished_at: nullableNumberValue(row, "finished_at"),
+    id: numberValue(row, "id", 0),
+    started_at: numberValue(row, "started_at", 0),
+    status: stringValue(row, "status", "success") as RetentionJobRunRecord["status"],
+    trigger_source: stringValue(row, "trigger_source", "scheduled"),
+  };
+}
+
 function mapDomainAsset(row: DbRow): DomainAssetRecord {
   return {
+    allow_catch_all_sync: boolValue(row, "allow_catch_all_sync", true),
     allow_mailbox_route_sync: boolValue(row, "allow_mailbox_route_sync", true),
     allow_new_mailboxes: boolValue(row, "allow_new_mailboxes", true),
     catch_all_forward_to: stringValue(row, "catch_all_forward_to"),
     catch_all_mode: stringValue(row, "catch_all_mode", "inherit") as DomainAssetRecord["catch_all_mode"],
+    cloudflare_api_token_configured: boolValue(row, "cloudflare_api_token_configured", false),
     created_at: numberValue(row, "created_at", Date.now()),
     domain: stringValue(row, "domain"),
     email_worker: stringValue(row, "email_worker"),
+    mailbox_route_forward_to: stringValue(row, "mailbox_route_forward_to"),
     environment_id: nullableNumberValue(row, "environment_id"),
     environment_name: stringValue(row, "environment_name"),
     environment_slug: stringValue(row, "environment_slug"),
@@ -357,6 +428,13 @@ function mapDomainAsset(row: DbRow): DomainAssetRecord {
     routing_profile_slug: stringValue(row, "routing_profile_slug"),
     updated_at: numberValue(row, "updated_at", Date.now()),
     zone_id: stringValue(row, "zone_id"),
+  };
+}
+
+function mapDomainAssetSecret(row: DbRow): DomainAssetSecretRecord {
+  return {
+    ...mapDomainAsset(row),
+    cloudflare_api_token: stringValue(row, "cloudflare_api_token"),
   };
 }
 
@@ -419,6 +497,7 @@ function mapEmailSummary(row: DbRow): EmailSummary {
     primary_mailbox_address: stringValue(row, "primary_mailbox_address"),
     preview,
     received_at: numberValue(row, "received_at", Date.now()),
+    resolved_retention: createEmptyResolvedRetentionPolicy(),
     result_count: Array.isArray(results) ? results.length : 0,
     subject: stringValue(row, "subject"),
     tags: safeParseJson<string[]>(stringValue(row, "tags", "[]"), []) || [],
@@ -458,6 +537,7 @@ function mapEmailDetail(row: DbRow, attachments: EmailAttachmentRecord[]): Email
     preview,
     raw_headers,
     received_at: numberValue(row, "received_at", Date.now()),
+    resolved_retention: createEmptyResolvedRetentionPolicy(),
     result_insights: buildRuleMatchInsights(results, extraction),
     result_count: Array.isArray(results) ? results.length : 0,
     results,
@@ -831,6 +911,12 @@ export interface RetentionPurgeSummary {
   scope_summaries: RetentionScopeSummaryRecord[];
 }
 
+type RetentionPurgeExecutionOptions = {
+  archive_emails?: boolean;
+  purge_active_emails?: boolean;
+  purge_deleted_emails?: boolean;
+};
+
 const RETENTION_POLICY_SCOPE_ORDER: Record<RetentionPolicyScopeLevel, number> = {
   environment: 2,
   global: 0,
@@ -976,6 +1062,32 @@ export function resolveRetentionPolicyConfigFromRecords(
   }
 
   return resolved;
+}
+
+function attachResolvedRetentionToRecord<
+  T extends {
+    environment_id: number | null;
+    mailbox_pool_id: number | null;
+    project_id: number | null;
+    resolved_retention: ResolvedRetentionPolicy;
+  },
+>(
+  record: T,
+  policies: Array<Pick<RetentionPolicyRecord, "archive_email_hours" | "deleted_email_retention_hours" | "email_retention_hours" | "environment_id" | "is_enabled" | "mailbox_pool_id" | "mailbox_ttl_hours" | "project_id" | "scope_level">>,
+  fallback: RetentionPolicyConfigInput = {},
+): T {
+  return {
+    ...record,
+    resolved_retention: resolveRetentionPolicyConfigFromRecords(
+      policies,
+      {
+        environment_id: record.environment_id,
+        mailbox_pool_id: record.mailbox_pool_id,
+        project_id: record.project_id,
+      },
+      fallback,
+    ),
+  };
 }
 
 export function resolveMailboxExpirationTimestamp(
@@ -1130,7 +1242,7 @@ export async function getWorkspaceCatalog(
   const environmentWhere = environmentClauses.length > 0 ? ` WHERE ${environmentClauses.join(" AND ")}` : "";
   const poolWhere = poolClauses.length > 0 ? ` WHERE ${poolClauses.join(" AND ")}` : "";
 
-  const [projectRows, environmentRows, poolRows] = await Promise.all([
+  const [projectRows, environmentRows, poolRows, policies] = await Promise.all([
     db.prepare(
       `SELECT
         p.id,
@@ -1185,12 +1297,46 @@ export async function getWorkspaceCatalog(
       LEFT JOIN environments e ON e.id = mp.environment_id${poolWhere}
       ORDER BY mp.is_enabled DESC, project_name ASC, environment_name ASC, mp.name ASC, mp.id ASC`,
     ).bind(...poolParams).all<DbRow>(),
+    getAllRetentionPolicies(db, { enabledOnly: true }, allowedProjectIds),
   ]);
 
+  const projects = projectRows.results.map(row => {
+    const record = mapWorkspaceProject(row);
+    return {
+      ...record,
+      resolved_retention: resolveRetentionPolicyConfigFromRecords(policies, {
+        project_id: record.id,
+      }),
+    };
+  });
+
+  const environments = environmentRows.results.map(row => {
+    const record = mapWorkspaceEnvironment(row);
+    return {
+      ...record,
+      resolved_retention: resolveRetentionPolicyConfigFromRecords(policies, {
+        environment_id: record.id,
+        project_id: record.project_id,
+      }),
+    };
+  });
+
+  const mailboxPools = poolRows.results.map(row => {
+    const record = mapMailboxPool(row);
+    return {
+      ...record,
+      resolved_retention: resolveRetentionPolicyConfigFromRecords(policies, {
+        environment_id: record.environment_id,
+        mailbox_pool_id: record.id,
+        project_id: record.project_id,
+      }),
+    };
+  });
+
   return {
-    environments: environmentRows.results.map(mapWorkspaceEnvironment),
-    mailbox_pools: poolRows.results.map(mapMailboxPool),
-    projects: projectRows.results.map(mapWorkspaceProject),
+    environments,
+    mailbox_pools: mailboxPools,
+    projects,
   };
 }
 
@@ -1498,6 +1644,7 @@ export async function resolveRetentionPolicyConfig(
 export async function applyRetentionPoliciesPurge(
   db: D1Database,
   fallback: RetentionPolicyConfigInput = {},
+  options: RetentionPurgeExecutionOptions = {},
 ): Promise<RetentionPurgeSummary> {
   const [policies, emailRows] = await Promise.all([
     getAllRetentionPolicies(db, { enabledOnly: true }),
@@ -1515,6 +1662,9 @@ export async function applyRetentionPoliciesPurge(
   const purged_deleted_emails: RetentionAffectedEmailRecord[] = [];
   let purged_deleted_email_count = 0;
   const scopeSummaries = new Map<string, RetentionScopeSummaryRecord>();
+  const shouldArchiveEmails = options.archive_emails !== false;
+  const shouldPurgeActiveEmails = options.purge_active_emails !== false;
+  const shouldPurgeDeletedEmails = options.purge_deleted_emails !== false;
 
   for (const row of emailRows.results) {
     const messageId = stringValue(row, "message_id");
@@ -1534,7 +1684,7 @@ export async function applyRetentionPoliciesPurge(
     const deletedAt = record.deleted_at;
     if (deletedAt !== null) {
       const maxHours = resolved.deleted_email_retention_hours;
-      if (maxHours !== null && deletedAt <= now - maxHours * hourInMs) {
+      if (shouldPurgeDeletedEmails && maxHours !== null && deletedAt <= now - maxHours * hourInMs) {
         await purgeEmail(db, messageId);
         purged_deleted_emails.push(record);
         if (record.project_id) affectedProjectIds.add(record.project_id);
@@ -1545,7 +1695,7 @@ export async function applyRetentionPoliciesPurge(
     }
 
     const maxHours = resolved.email_retention_hours;
-    if (maxHours !== null && record.received_at <= now - maxHours * hourInMs) {
+    if (shouldPurgeActiveEmails && maxHours !== null && record.received_at <= now - maxHours * hourInMs) {
       await purgeEmail(db, messageId);
       purged_active_emails.push(record);
       if (record.project_id) affectedProjectIds.add(record.project_id);
@@ -1556,7 +1706,12 @@ export async function applyRetentionPoliciesPurge(
 
     const archivedAt = nullableNumberValue(row, "archived_at");
     const archiveHours = resolved.archive_email_hours;
-    if (archivedAt === null && archiveHours !== null && record.received_at <= now - archiveHours * hourInMs) {
+    if (
+      shouldArchiveEmails
+      && archivedAt === null
+      && archiveHours !== null
+      && record.received_at <= now - archiveHours * hourInMs
+    ) {
       await archiveEmail(db, messageId, {
         archive_reason: "retention_policy",
         archived_by: "system",
@@ -1636,6 +1791,131 @@ export async function createRetentionJobRun(
   return numberValue(row || {}, "id", 0);
 }
 
+export async function createMailboxSyncRun(
+  db: D1Database,
+  input: {
+    requested_by: string;
+    started_at: number;
+    status?: MailboxSyncRunStatus;
+    trigger_source?: string;
+  },
+): Promise<number> {
+  const status = input.status || "pending";
+  const triggerSource = input.trigger_source || "manual";
+  const createdAt = input.started_at || Date.now();
+  const result = await db.prepare(
+    "INSERT INTO mailbox_sync_runs (trigger_source, requested_by, status, catch_all_enabled, cloudflare_configured, cloudflare_routes_total, created_count, updated_count, skipped_count, observed_total, domain_summaries_json, error_message, started_at, finished_at, duration_ms, created_at, updated_at) VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 0, '[]', '', ?, NULL, NULL, ?, ?)",
+  ).bind(
+    triggerSource,
+    input.requested_by || "",
+    status,
+    input.started_at,
+    createdAt,
+    createdAt,
+  ).run() as { meta?: { last_row_id?: number } };
+
+  const insertedId = Number(result?.meta?.last_row_id || 0);
+  if (insertedId > 0) return insertedId;
+
+  const row = await db.prepare(
+    "SELECT id FROM mailbox_sync_runs WHERE trigger_source = ? AND requested_by = ? AND started_at = ? ORDER BY id DESC LIMIT 1",
+  ).bind(triggerSource, input.requested_by || "", input.started_at).first<DbRow>();
+  return numberValue(row || {}, "id", 0);
+}
+
+export async function markMailboxSyncRunRunning(db: D1Database, id: number): Promise<void> {
+  await db.prepare(
+    "UPDATE mailbox_sync_runs SET status = 'running', updated_at = ? WHERE id = ? AND status = 'pending'",
+  ).bind(Date.now(), id).run();
+}
+
+export async function touchMailboxSyncRunHeartbeat(
+  db: D1Database,
+  id: number,
+  updatedAt = Date.now(),
+): Promise<void> {
+  await db.prepare(
+    "UPDATE mailbox_sync_runs SET updated_at = ? WHERE id = ? AND status IN ('pending', 'running')",
+  ).bind(updatedAt, id).run();
+}
+
+export async function completeMailboxSyncRun(
+  db: D1Database,
+  id: number,
+  input: {
+    finished_at: number;
+    result: MailboxSyncResult;
+    started_at: number;
+    status?: Extract<MailboxSyncRunStatus, "success">;
+  },
+): Promise<void> {
+  const status = input.status || "success";
+  await db.prepare(
+    "UPDATE mailbox_sync_runs SET status = ?, catch_all_enabled = ?, cloudflare_configured = ?, cloudflare_routes_total = ?, created_count = ?, updated_count = ?, skipped_count = ?, observed_total = ?, domain_summaries_json = ?, error_message = '', finished_at = ?, duration_ms = ?, updated_at = ? WHERE id = ?",
+  ).bind(
+    status,
+    input.result.catch_all_enabled ? 1 : 0,
+    input.result.cloudflare_configured ? 1 : 0,
+    input.result.cloudflare_routes_total,
+    input.result.created_count,
+    input.result.updated_count,
+    input.result.skipped_count,
+    input.result.observed_total,
+    jsonStringify((input.result.domain_summaries || []) as unknown as JsonValue, "[]"),
+    input.finished_at,
+    Math.max(0, input.finished_at - input.started_at),
+    input.finished_at,
+    id,
+  ).run();
+}
+
+export async function failMailboxSyncRun(
+  db: D1Database,
+  id: number,
+  input: {
+    error_message: string;
+    finished_at: number;
+    started_at: number;
+  },
+): Promise<void> {
+  await db.prepare(
+    "UPDATE mailbox_sync_runs SET status = 'failed', error_message = ?, finished_at = ?, duration_ms = ?, updated_at = ? WHERE id = ?",
+  ).bind(
+    input.error_message,
+    input.finished_at,
+    Math.max(0, input.finished_at - input.started_at),
+    input.finished_at,
+    id,
+  ).run();
+}
+
+export async function getMailboxSyncRunById(
+  db: D1Database,
+  id: number,
+): Promise<MailboxSyncRunRecord | null> {
+  const row = await db.prepare(
+    "SELECT id, trigger_source, requested_by, status, catch_all_enabled, cloudflare_configured, cloudflare_routes_total, created_count, updated_count, skipped_count, observed_total, domain_summaries_json, error_message, started_at, finished_at, duration_ms, created_at, updated_at FROM mailbox_sync_runs WHERE id = ? LIMIT 1",
+  ).bind(id).first<DbRow>();
+
+  return row ? mapMailboxSyncRun(row) : null;
+}
+
+export async function getLatestMailboxSyncRun(db: D1Database): Promise<MailboxSyncRunRecord | null> {
+  const row = await db.prepare(
+    "SELECT id, trigger_source, requested_by, status, catch_all_enabled, cloudflare_configured, cloudflare_routes_total, created_count, updated_count, skipped_count, observed_total, domain_summaries_json, error_message, started_at, finished_at, duration_ms, created_at, updated_at FROM mailbox_sync_runs ORDER BY created_at DESC, id DESC LIMIT 1",
+  ).first<DbRow>();
+
+  return row ? mapMailboxSyncRun(row) : null;
+}
+
+export async function getActiveMailboxSyncRun(db: D1Database): Promise<MailboxSyncRunRecord | null> {
+  const row = await db.prepare(
+    "SELECT id, trigger_source, requested_by, status, catch_all_enabled, cloudflare_configured, cloudflare_routes_total, created_count, updated_count, skipped_count, observed_total, domain_summaries_json, error_message, started_at, finished_at, duration_ms, created_at, updated_at FROM mailbox_sync_runs WHERE status IN ('pending', 'running') ORDER BY created_at DESC, id DESC LIMIT 1",
+  ).first<DbRow>();
+
+  return row ? mapMailboxSyncRun(row) : null;
+}
+
 export async function getRetentionJobRunsPaged(
   db: D1Database,
   page: number,
@@ -1683,6 +1963,97 @@ export async function getRetentionJobRunsPaged(
     page,
     pageSize,
     total: numberValue(countRow || {}, "total", 0),
+  };
+}
+
+export async function getRetentionJobRunSummary(
+  db: D1Database,
+): Promise<RetentionJobRunSummary> {
+  const recent24hThreshold = Date.now() - 24 * 60 * 60 * 1000;
+
+  const [
+    totalsRow,
+    recent24hRow,
+    lastRunRow,
+    lastSuccessRow,
+    lastFailedRow,
+    recentStatusRows,
+  ] = await Promise.all([
+    db.prepare(
+      `SELECT
+        COUNT(1) as total_run_count,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as total_success_count,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed_count
+      FROM retention_job_runs`,
+    ).first<DbRow>(),
+    db.prepare(
+      `SELECT
+        COUNT(1) as recent_24h_run_count,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as recent_24h_success_count,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as recent_24h_failed_count,
+        SUM(scanned_email_count) as recent_24h_scanned_email_count,
+        SUM(archived_email_count) as recent_24h_archived_email_count,
+        SUM(purged_active_email_count) as recent_24h_purged_active_email_count,
+        SUM(purged_deleted_email_count) as recent_24h_purged_deleted_email_count,
+        SUM(expired_mailbox_count) as recent_24h_expired_mailbox_count,
+        AVG(duration_ms) as average_duration_ms_24h
+      FROM retention_job_runs
+      WHERE created_at >= ?`,
+    ).bind(recent24hThreshold).first<DbRow>(),
+    db.prepare(
+      `SELECT id, trigger_source, status, started_at, finished_at, duration_ms
+      FROM retention_job_runs
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    ).first<DbRow>(),
+    db.prepare(
+      `SELECT started_at, finished_at
+      FROM retention_job_runs
+      WHERE status = 'success'
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    ).first<DbRow>(),
+    db.prepare(
+      `SELECT started_at, finished_at
+      FROM retention_job_runs
+      WHERE status = 'failed'
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    ).first<DbRow>(),
+    db.prepare(
+      `SELECT status
+      FROM retention_job_runs
+      ORDER BY created_at DESC`,
+    ).all<DbRow>(),
+  ]);
+
+  let consecutiveFailureCount = 0;
+  for (const row of recentStatusRows.results) {
+    if (stringValue(row, "status") !== "failed") break;
+    consecutiveFailureCount += 1;
+  }
+
+  return {
+    average_duration_ms_24h: nullableNumberValue(recent24hRow || {}, "average_duration_ms_24h"),
+    consecutive_failure_count: consecutiveFailureCount,
+    last_failed_at:
+      nullableNumberValue(lastFailedRow || {}, "finished_at")
+      ?? nullableNumberValue(lastFailedRow || {}, "started_at"),
+    last_run: mapRetentionJobRunSummaryLastRun(lastRunRow),
+    last_success_at:
+      nullableNumberValue(lastSuccessRow || {}, "finished_at")
+      ?? nullableNumberValue(lastSuccessRow || {}, "started_at"),
+    recent_24h_archived_email_count: numberValue(recent24hRow || {}, "recent_24h_archived_email_count", 0),
+    recent_24h_expired_mailbox_count: numberValue(recent24hRow || {}, "recent_24h_expired_mailbox_count", 0),
+    recent_24h_failed_count: numberValue(recent24hRow || {}, "recent_24h_failed_count", 0),
+    recent_24h_purged_active_email_count: numberValue(recent24hRow || {}, "recent_24h_purged_active_email_count", 0),
+    recent_24h_purged_deleted_email_count: numberValue(recent24hRow || {}, "recent_24h_purged_deleted_email_count", 0),
+    recent_24h_run_count: numberValue(recent24hRow || {}, "recent_24h_run_count", 0),
+    recent_24h_scanned_email_count: numberValue(recent24hRow || {}, "recent_24h_scanned_email_count", 0),
+    recent_24h_success_count: numberValue(recent24hRow || {}, "recent_24h_success_count", 0),
+    total_failed_count: numberValue(totalsRow || {}, "total_failed_count", 0),
+    total_run_count: numberValue(totalsRow || {}, "total_run_count", 0),
+    total_success_count: numberValue(totalsRow || {}, "total_success_count", 0),
   };
 }
 
@@ -2175,6 +2546,18 @@ export async function getOutboundTemplates(db: D1Database): Promise<OutboundTemp
   return result.results.map(mapOutboundTemplate);
 }
 
+export async function getOutboundTemplateById(
+  db: D1Database,
+  id: number,
+): Promise<OutboundTemplateRecord | null> {
+  const row = await db.prepare(
+    "SELECT id, name, subject_template, text_template, html_template, variables_json, is_enabled, created_by, created_at, updated_at FROM outbound_templates WHERE id = ? LIMIT 1",
+  ).bind(id).first<DbRow>();
+
+  if (!row) return null;
+  return mapOutboundTemplate(row);
+}
+
 export async function createOutboundTemplate(
   db: D1Database,
   input: {
@@ -2238,6 +2621,18 @@ export async function getOutboundContacts(db: D1Database): Promise<OutboundConta
     "SELECT id, name, email, note, tags, is_favorite, created_at, updated_at FROM outbound_contacts ORDER BY is_favorite DESC, updated_at DESC",
   ).all<DbRow>();
   return result.results.map(mapOutboundContact);
+}
+
+export async function getOutboundContactById(
+  db: D1Database,
+  id: number,
+): Promise<OutboundContactRecord | null> {
+  const row = await db.prepare(
+    "SELECT id, name, email, note, tags, is_favorite, created_at, updated_at FROM outbound_contacts WHERE id = ? LIMIT 1",
+  ).bind(id).first<DbRow>();
+
+  if (!row) return null;
+  return mapOutboundContact(row);
 }
 
 export async function createOutboundContact(
@@ -2499,13 +2894,14 @@ export async function getEmails(
   query += " ORDER BY emails.received_at DESC LIMIT ? OFFSET ?";
   params.push(pageSize, offset);
 
-  const [list, countRow] = await Promise.all([
+  const [list, countRow, policies] = await Promise.all([
     db.prepare(query).bind(...params).all<DbRow>(),
     db.prepare(countQuery).bind(...countParams).first<DbRow>(),
+    getAllRetentionPolicies(db, { enabledOnly: true }, allowedProjectIds),
   ]);
 
   return {
-    items: list.results.map(mapEmailSummary),
+    items: list.results.map(row => attachResolvedRetentionToRecord(mapEmailSummary(row), policies)),
     page,
     pageSize,
     total: numberValue(countRow || {}, "total", 0),
@@ -2525,16 +2921,22 @@ export async function getEmailByMessageIdScoped(
   const scopedWhere = normalizedAllowedProjectIds.length > 0
     ? ` AND EXISTS (SELECT 1 FROM email_mailbox_links links WHERE links.email_message_id = emails.message_id AND links.project_id IN (${buildSqlPlaceholders(normalizedAllowedProjectIds.length)}))`
     : "";
-  const [row, attachmentRows] = await Promise.all([
+  const [row, attachmentRows, policies] = await Promise.all([
     db.prepare(
       `SELECT emails.message_id, emails.from_address, emails.to_address, emails.subject, emails.extracted_json, emails.received_at, emails.text_body, emails.html_body, emails.raw_headers, emails.has_attachments, emails.archived_at, emails.archived_by, emails.archive_reason, emails.deleted_at, emails.note, emails.tags, emails.project_id, emails.environment_id, emails.mailbox_pool_id, COALESCE(projects.name, '') as project_name, COALESCE(projects.slug, '') as project_slug, COALESCE(environments.name, '') as environment_name, COALESCE(environments.slug, '') as environment_slug, COALESCE(mailbox_pools.name, '') as mailbox_pool_name, COALESCE(mailbox_pools.slug, '') as mailbox_pool_slug, COALESCE(mailboxes.address, '') as primary_mailbox_address FROM emails LEFT JOIN projects ON projects.id = emails.project_id LEFT JOIN environments ON environments.id = emails.environment_id LEFT JOIN mailbox_pools ON mailbox_pools.id = emails.mailbox_pool_id LEFT JOIN mailboxes ON mailboxes.id = emails.primary_mailbox_id WHERE emails.message_id = ?${scopedWhere} LIMIT 1`,
     ).bind(String(messageId || ""), ...normalizedAllowedProjectIds).first<DbRow>(),
     db.prepare(
       "SELECT id, filename, mime_type, disposition, content_id, size_bytes, is_stored FROM email_attachments WHERE email_message_id = ? ORDER BY id ASC",
     ).bind(String(messageId || "")).all<DbRow>(),
+    getAllRetentionPolicies(db, { enabledOnly: true }, allowedProjectIds),
   ]);
 
-  return row ? mapEmailDetail(row, attachmentRows.results.map(mapAttachment)) : null;
+  return row
+    ? attachResolvedRetentionToRecord(
+        mapEmailDetail(row, attachmentRows.results.map(mapAttachment)),
+        policies,
+      )
+    : null;
 }
 
 export async function updateEmailMetadata(
@@ -2666,6 +3068,22 @@ export async function getDomainAssetById(db: D1Database, id: number): Promise<Do
   return row ? mapDomainAsset(row) : null;
 }
 
+export async function getDomainAssetWithSecretById(
+  db: D1Database,
+  id: number,
+): Promise<DomainAssetSecretRecord | null> {
+  const row = await db.prepare(
+    `SELECT ${DOMAIN_ASSET_SECRET_SELECT_FIELDS}
+    FROM domains d
+    LEFT JOIN domain_routing_profiles rp ON rp.id = d.routing_profile_id
+    LEFT JOIN projects p ON p.id = d.project_id
+    LEFT JOIN environments e ON e.id = d.environment_id
+    WHERE d.id = ? LIMIT 1`,
+  ).bind(id).first<DbRow>();
+
+  return row ? mapDomainAssetSecret(row) : null;
+}
+
 export async function getDomainAssetByName(db: D1Database, domain: string): Promise<DomainAssetRecord | null> {
   const row = await db.prepare(
     `SELECT ${DOMAIN_ASSET_SELECT_FIELDS}
@@ -2677,6 +3095,22 @@ export async function getDomainAssetByName(db: D1Database, domain: string): Prom
   ).bind(String(domain || "").trim().toLowerCase()).first<DbRow>();
 
   return row ? mapDomainAsset(row) : null;
+}
+
+export async function getDomainAssetWithSecretByName(
+  db: D1Database,
+  domain: string,
+): Promise<DomainAssetSecretRecord | null> {
+  const row = await db.prepare(
+    `SELECT ${DOMAIN_ASSET_SECRET_SELECT_FIELDS}
+    FROM domains d
+    LEFT JOIN domain_routing_profiles rp ON rp.id = d.routing_profile_id
+    LEFT JOIN projects p ON p.id = d.project_id
+    LEFT JOIN environments e ON e.id = d.environment_id
+    WHERE d.domain = ? LIMIT 1`,
+  ).bind(String(domain || "").trim().toLowerCase()).first<DbRow>();
+
+  return row ? mapDomainAssetSecret(row) : null;
 }
 
 export async function getPrimaryDomainAsset(db: D1Database): Promise<DomainAssetRecord | null> {
@@ -2692,15 +3126,41 @@ export async function getPrimaryDomainAsset(db: D1Database): Promise<DomainAsset
   return row ? mapDomainAsset(row) : null;
 }
 
+export async function getAllDomainAssetsWithSecrets(
+  db: D1Database,
+  includeDisabled = true,
+  allowedProjectIds?: number[] | null,
+): Promise<DomainAssetSecretRecord[]> {
+  const scope = buildProjectScopedFilter("d", allowedProjectIds);
+  const query = includeDisabled
+    ? `SELECT ${DOMAIN_ASSET_SECRET_SELECT_FIELDS}
+      FROM domains d
+      LEFT JOIN domain_routing_profiles rp ON rp.id = d.routing_profile_id
+      LEFT JOIN projects p ON p.id = d.project_id
+      LEFT JOIN environments e ON e.id = d.environment_id${scope.whereClause}
+      ORDER BY d.is_primary DESC, d.is_enabled DESC, d.domain ASC`
+    : `SELECT ${DOMAIN_ASSET_SECRET_SELECT_FIELDS}
+      FROM domains d
+      LEFT JOIN domain_routing_profiles rp ON rp.id = d.routing_profile_id
+      LEFT JOIN projects p ON p.id = d.project_id
+      LEFT JOIN environments e ON e.id = d.environment_id${scope.whereClause ? `${scope.whereClause} AND d.is_enabled = 1` : " WHERE d.is_enabled = 1"}
+      ORDER BY d.is_primary DESC, d.domain ASC`;
+  const rows = await db.prepare(query).bind(...scope.params).all<DbRow>();
+  return rows.results.map(mapDomainAssetSecret);
+}
+
 export async function createDomainAsset(
   db: D1Database,
   input: {
+    allow_catch_all_sync: boolean;
     allow_mailbox_route_sync: boolean;
     allow_new_mailboxes: boolean;
     catch_all_forward_to: string;
     catch_all_mode: DomainAssetRecord["catch_all_mode"];
+    cloudflare_api_token: string;
     domain: string;
     email_worker: string;
+    mailbox_route_forward_to: string;
     environment_id: number | null;
     is_enabled: boolean;
     is_primary: boolean;
@@ -2717,14 +3177,17 @@ export async function createDomainAsset(
   }
 
   const result = await db.prepare(
-    "INSERT INTO domains (domain, provider, allow_new_mailboxes, allow_mailbox_route_sync, zone_id, email_worker, note, is_enabled, is_primary, catch_all_mode, catch_all_forward_to, routing_profile_id, project_id, environment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO domains (domain, provider, allow_new_mailboxes, allow_catch_all_sync, allow_mailbox_route_sync, zone_id, email_worker, mailbox_route_forward_to, cloudflare_api_token, note, is_enabled, is_primary, catch_all_mode, catch_all_forward_to, routing_profile_id, project_id, environment_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).bind(
     input.domain,
     input.provider,
     input.allow_new_mailboxes ? 1 : 0,
+    input.allow_catch_all_sync ? 1 : 0,
     input.allow_mailbox_route_sync ? 1 : 0,
     input.zone_id,
     input.email_worker,
+    input.mailbox_route_forward_to,
+    input.cloudflare_api_token,
     input.note,
     input.is_enabled ? 1 : 0,
     input.is_primary ? 1 : 0,
@@ -2750,12 +3213,15 @@ export async function updateDomainAsset(
   db: D1Database,
   id: number,
   input: {
+    allow_catch_all_sync: boolean;
     allow_mailbox_route_sync: boolean;
     allow_new_mailboxes: boolean;
     catch_all_forward_to: string;
     catch_all_mode: DomainAssetRecord["catch_all_mode"];
+    cloudflare_api_token: string;
     domain: string;
     email_worker: string;
+    mailbox_route_forward_to: string;
     environment_id: number | null;
     is_enabled: boolean;
     is_primary: boolean;
@@ -2772,14 +3238,17 @@ export async function updateDomainAsset(
   }
 
   await db.prepare(
-    "UPDATE domains SET domain = ?, provider = ?, allow_new_mailboxes = ?, allow_mailbox_route_sync = ?, zone_id = ?, email_worker = ?, note = ?, is_enabled = ?, is_primary = ?, catch_all_mode = ?, catch_all_forward_to = ?, routing_profile_id = ?, project_id = ?, environment_id = ?, updated_at = ? WHERE id = ?",
+    "UPDATE domains SET domain = ?, provider = ?, allow_new_mailboxes = ?, allow_catch_all_sync = ?, allow_mailbox_route_sync = ?, zone_id = ?, email_worker = ?, mailbox_route_forward_to = ?, cloudflare_api_token = ?, note = ?, is_enabled = ?, is_primary = ?, catch_all_mode = ?, catch_all_forward_to = ?, routing_profile_id = ?, project_id = ?, environment_id = ?, updated_at = ? WHERE id = ?",
   ).bind(
     input.domain,
     input.provider,
     input.allow_new_mailboxes ? 1 : 0,
+    input.allow_catch_all_sync ? 1 : 0,
     input.allow_mailbox_route_sync ? 1 : 0,
     input.zone_id,
     input.email_worker,
+    input.mailbox_route_forward_to,
+    input.cloudflare_api_token,
     input.note,
     input.is_enabled ? 1 : 0,
     input.is_primary ? 1 : 0,
@@ -3042,6 +3511,7 @@ export async function getDomainAssetUsageStats(
   allowedProjectIds?: number[] | null,
 ): Promise<Array<{
   active_mailbox_total: number;
+  active_mailbox_addresses: string[];
   domain: string;
   email_total: number;
   observed_mailbox_total: number;
@@ -3083,6 +3553,7 @@ export async function getDomainAssetUsageStats(
 
   const statsMap = new Map<string, {
     active_mailbox_total: number;
+    active_mailboxes: Set<string>;
     domain: string;
     email_total: number;
     observed_mailboxes: Set<string>;
@@ -3091,6 +3562,7 @@ export async function getDomainAssetUsageStats(
   for (const domain of normalizedDomains) {
     statsMap.set(domain, {
       active_mailbox_total: 0,
+      active_mailboxes: new Set<string>(),
       domain,
       email_total: 0,
       observed_mailboxes: new Set<string>(),
@@ -3103,6 +3575,7 @@ export async function getDomainAssetUsageStats(
     const stats = statsMap.get(domain);
     if (!stats) continue;
     stats.active_mailbox_total += 1;
+    stats.active_mailboxes.add(address);
   }
 
   for (const row of emailRows.results) {
@@ -3131,6 +3604,7 @@ export async function getDomainAssetUsageStats(
     const stats = statsMap.get(domain)!;
     return {
       active_mailbox_total: stats.active_mailbox_total,
+      active_mailbox_addresses: Array.from(stats.active_mailboxes).sort(),
       domain,
       email_total: stats.email_total,
       observed_mailbox_total: stats.observed_mailboxes.size,
@@ -3204,6 +3678,13 @@ export async function deleteRule(db: D1Database, id: number): Promise<void> {
   await db.prepare("DELETE FROM rules WHERE id = ?").bind(id).run();
 }
 
+export async function getRuleById(db: D1Database, id: number): Promise<RuleRecord | null> {
+  const row = await db.prepare(
+    "SELECT id, remark, sender_filter, pattern, created_at, updated_at, is_enabled FROM rules WHERE id = ? LIMIT 1",
+  ).bind(id).first<DbRow>();
+  return row ? mapRule(row) : null;
+}
+
 export async function getWhitelistPaged(
   db: D1Database,
   page: number,
@@ -3260,6 +3741,13 @@ export async function updateWhitelistEntry(
 
 export async function deleteWhitelistEntry(db: D1Database, id: number): Promise<void> {
   await db.prepare("DELETE FROM whitelist WHERE id = ?").bind(id).run();
+}
+
+export async function getWhitelistById(db: D1Database, id: number): Promise<WhitelistRecord | null> {
+  const row = await db.prepare(
+    "SELECT id, sender_pattern, note, created_at, updated_at, is_enabled FROM whitelist WHERE id = ? LIMIT 1",
+  ).bind(id).first<DbRow>();
+  return row ? mapWhitelist(row) : null;
 }
 
 export async function getMailboxesPaged(
@@ -3321,7 +3809,7 @@ export async function getMailboxesPaged(
   }
 
   const whereClause = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
-  const [list, countRow] = await Promise.all([
+  const [list, countRow, policies] = await Promise.all([
     db.prepare(
       `SELECT
         m.id,
@@ -3352,10 +3840,11 @@ export async function getMailboxesPaged(
       ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,
     ).bind(...params, pageSize, offset).all<DbRow>(),
     db.prepare(`SELECT COUNT(1) as total FROM mailboxes m${whereClause}`).bind(...countParams).first<DbRow>(),
+    getAllRetentionPolicies(db, { enabledOnly: true }, allowedProjectIds),
   ]);
 
   return {
-    items: list.results.map(mapMailbox),
+    items: list.results.map(row => attachResolvedRetentionToRecord(mapMailbox(row), policies)),
     page,
     pageSize,
     total: numberValue(countRow || {}, "total", 0),
@@ -3381,36 +3870,39 @@ export async function getAllMailboxes(
   }
 
   const whereClause = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
-  const result = await db.prepare(
-    `SELECT
-      m.id,
-      m.address,
-      m.note,
-      m.is_enabled,
-      m.created_at,
-      m.updated_at,
-      m.last_received_at,
-      m.tags,
-      m.expires_at,
-      m.deleted_at,
-      m.receive_count,
-      m.created_by,
-      m.project_id,
-      m.environment_id,
-      m.mailbox_pool_id,
-      COALESCE(p.name, '') as project_name,
-      COALESCE(p.slug, '') as project_slug,
-      COALESCE(e.name, '') as environment_name,
-      COALESCE(e.slug, '') as environment_slug,
-      COALESCE(mp.name, '') as mailbox_pool_name,
-      COALESCE(mp.slug, '') as mailbox_pool_slug
-    FROM mailboxes m
-    LEFT JOIN projects p ON p.id = m.project_id
-    LEFT JOIN environments e ON e.id = m.environment_id
-    LEFT JOIN mailbox_pools mp ON mp.id = m.mailbox_pool_id${whereClause}
-    ORDER BY m.created_at DESC`,
-  ).bind(...params).all<DbRow>();
-  return result.results.map(mapMailbox);
+  const [result, policies] = await Promise.all([
+    db.prepare(
+      `SELECT
+        m.id,
+        m.address,
+        m.note,
+        m.is_enabled,
+        m.created_at,
+        m.updated_at,
+        m.last_received_at,
+        m.tags,
+        m.expires_at,
+        m.deleted_at,
+        m.receive_count,
+        m.created_by,
+        m.project_id,
+        m.environment_id,
+        m.mailbox_pool_id,
+        COALESCE(p.name, '') as project_name,
+        COALESCE(p.slug, '') as project_slug,
+        COALESCE(e.name, '') as environment_name,
+        COALESCE(e.slug, '') as environment_slug,
+        COALESCE(mp.name, '') as mailbox_pool_name,
+        COALESCE(mp.slug, '') as mailbox_pool_slug
+      FROM mailboxes m
+      LEFT JOIN projects p ON p.id = m.project_id
+      LEFT JOIN environments e ON e.id = m.environment_id
+      LEFT JOIN mailbox_pools mp ON mp.id = m.mailbox_pool_id${whereClause}
+      ORDER BY m.created_at DESC`,
+    ).bind(...params).all<DbRow>(),
+    getAllRetentionPolicies(db, { enabledOnly: true }, allowedProjectIds),
+  ]);
+  return result.results.map(row => attachResolvedRetentionToRecord(mapMailbox(row), policies));
 }
 
 export async function getMailboxById(
@@ -3422,11 +3914,14 @@ export async function getMailboxById(
   const scopedWhere = normalizedAllowedProjectIds.length > 0
     ? ` AND m.project_id IN (${buildSqlPlaceholders(normalizedAllowedProjectIds.length)})`
     : "";
-  const row = await db.prepare(
-    `SELECT m.id, m.address, m.note, m.is_enabled, m.created_at, m.updated_at, m.last_received_at, m.tags, m.expires_at, m.deleted_at, m.receive_count, m.created_by, m.project_id, m.environment_id, m.mailbox_pool_id, COALESCE(p.name, '') as project_name, COALESCE(p.slug, '') as project_slug, COALESCE(e.name, '') as environment_name, COALESCE(e.slug, '') as environment_slug, COALESCE(mp.name, '') as mailbox_pool_name, COALESCE(mp.slug, '') as mailbox_pool_slug FROM mailboxes m LEFT JOIN projects p ON p.id = m.project_id LEFT JOIN environments e ON e.id = m.environment_id LEFT JOIN mailbox_pools mp ON mp.id = m.mailbox_pool_id WHERE m.id = ?${scopedWhere} LIMIT 1`,
-  ).bind(id, ...normalizedAllowedProjectIds).first<DbRow>();
+  const [row, policies] = await Promise.all([
+    db.prepare(
+      `SELECT m.id, m.address, m.note, m.is_enabled, m.created_at, m.updated_at, m.last_received_at, m.tags, m.expires_at, m.deleted_at, m.receive_count, m.created_by, m.project_id, m.environment_id, m.mailbox_pool_id, COALESCE(p.name, '') as project_name, COALESCE(p.slug, '') as project_slug, COALESCE(e.name, '') as environment_name, COALESCE(e.slug, '') as environment_slug, COALESCE(mp.name, '') as mailbox_pool_name, COALESCE(mp.slug, '') as mailbox_pool_slug FROM mailboxes m LEFT JOIN projects p ON p.id = m.project_id LEFT JOIN environments e ON e.id = m.environment_id LEFT JOIN mailbox_pools mp ON mp.id = m.mailbox_pool_id WHERE m.id = ?${scopedWhere} LIMIT 1`,
+    ).bind(id, ...normalizedAllowedProjectIds).first<DbRow>(),
+    getAllRetentionPolicies(db, { enabledOnly: true }, allowedProjectIds),
+  ]);
   if (!row) return null;
-  return mapMailbox(row);
+  return attachResolvedRetentionToRecord(mapMailbox(row), policies);
 }
 
 export async function backfillMailboxWorkspaceScope(
@@ -3587,10 +4082,6 @@ export async function getObservedMailboxStats(
   db: D1Database,
   mailboxDomains: string[] | string = "",
 ): Promise<Array<{ address: string; last_received_at: number | null; receive_count: number }>> {
-  const result = await db.prepare(
-    "SELECT to_address, received_at FROM emails WHERE deleted_at IS NULL ORDER BY received_at DESC",
-  ).all<DbRow>();
-
   const normalizedDomains = Array.from(
     new Set(
       (Array.isArray(mailboxDomains) ? mailboxDomains : [mailboxDomains])
@@ -3598,10 +4089,32 @@ export async function getObservedMailboxStats(
         .filter(Boolean),
     ),
   );
+  const clauses = ["deleted_at IS NULL"];
+  const params: unknown[] = [];
+
+  if (normalizedDomains.length > 0) {
+    clauses.push(
+      `(${normalizedDomains.map(() => "to_address LIKE ?").join(" OR ")})`,
+    );
+    params.push(...normalizedDomains.map(domain => `%@${domain}%`));
+  }
+
+  const result = await db.prepare(
+    `SELECT
+      to_address,
+      MAX(received_at) as last_received_at,
+      COUNT(1) as receive_count
+    FROM emails
+    WHERE ${clauses.join(" AND ")}
+    GROUP BY to_address
+    ORDER BY last_received_at DESC`,
+  ).bind(...params).all<DbRow>();
+
   const addresses = new Map<string, { address: string; last_received_at: number | null; receive_count: number }>();
 
   for (const row of result.results) {
-    const receivedAt = numberValue(row, "received_at", 0);
+    const receivedAt = numberValue(row, "last_received_at", 0);
+    const groupedReceiveCount = Math.max(0, numberValue(row, "receive_count", 0));
     const rawAddresses = stringValue(row, "to_address")
       .split(",")
       .map(item => normalizeEmailAddress(item))
@@ -3620,7 +4133,7 @@ export async function getObservedMailboxStats(
         last_received_at: null,
         receive_count: 0,
       };
-      current.receive_count += 1;
+      current.receive_count += groupedReceiveCount;
       current.last_received_at = Math.max(current.last_received_at || 0, receivedAt) || null;
       addresses.set(address, current);
     }
@@ -3695,9 +4208,12 @@ export async function applyMailboxSyncCandidate(
 
 export async function disableExpiredMailboxes(db: D1Database): Promise<MailboxRecord[]> {
   const now = Date.now();
-  const expired = await db.prepare(
-    "SELECT m.id, m.address, m.note, m.is_enabled, m.created_at, m.updated_at, m.last_received_at, m.tags, m.expires_at, m.deleted_at, m.receive_count, m.created_by, m.project_id, m.environment_id, m.mailbox_pool_id, COALESCE(p.name, '') as project_name, COALESCE(p.slug, '') as project_slug, COALESCE(e.name, '') as environment_name, COALESCE(e.slug, '') as environment_slug, COALESCE(mp.name, '') as mailbox_pool_name, COALESCE(mp.slug, '') as mailbox_pool_slug FROM mailboxes m LEFT JOIN projects p ON p.id = m.project_id LEFT JOIN environments e ON e.id = m.environment_id LEFT JOIN mailbox_pools mp ON mp.id = m.mailbox_pool_id WHERE m.deleted_at IS NULL AND m.is_enabled = 1 AND m.expires_at IS NOT NULL AND m.expires_at <= ?",
-  ).bind(now).all<DbRow>();
+  const [expired, policies] = await Promise.all([
+    db.prepare(
+      "SELECT m.id, m.address, m.note, m.is_enabled, m.created_at, m.updated_at, m.last_received_at, m.tags, m.expires_at, m.deleted_at, m.receive_count, m.created_by, m.project_id, m.environment_id, m.mailbox_pool_id, COALESCE(p.name, '') as project_name, COALESCE(p.slug, '') as project_slug, COALESCE(e.name, '') as environment_name, COALESCE(e.slug, '') as environment_slug, COALESCE(mp.name, '') as mailbox_pool_name, COALESCE(mp.slug, '') as mailbox_pool_slug FROM mailboxes m LEFT JOIN projects p ON p.id = m.project_id LEFT JOIN environments e ON e.id = m.environment_id LEFT JOIN mailbox_pools mp ON mp.id = m.mailbox_pool_id WHERE m.deleted_at IS NULL AND m.is_enabled = 1 AND m.expires_at IS NOT NULL AND m.expires_at <= ?",
+    ).bind(now).all<DbRow>(),
+    getAllRetentionPolicies(db, { enabledOnly: true }),
+  ]);
 
   if (expired.results.length === 0) return [];
 
@@ -3705,7 +4221,7 @@ export async function disableExpiredMailboxes(db: D1Database): Promise<MailboxRe
     "UPDATE mailboxes SET is_enabled = 0, updated_at = ? WHERE deleted_at IS NULL AND is_enabled = 1 AND expires_at IS NOT NULL AND expires_at <= ?",
   ).bind(now, now).run();
 
-  return expired.results.map(mapMailbox);
+  return expired.results.map(row => attachResolvedRetentionToRecord(mapMailbox(row), policies));
 }
 
 async function replaceProjectBindings(

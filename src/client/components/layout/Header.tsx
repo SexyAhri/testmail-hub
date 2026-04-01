@@ -5,7 +5,7 @@ import {
   SunOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { App, Avatar, Breadcrumb, Dropdown, Layout, Space, Switch, theme } from "antd";
+import { App, Avatar, Breadcrumb, Dropdown, Layout, Space, Spin, Switch, theme } from "antd";
 import { useRef } from "react";
 
 import { useTheme } from "../../providers";
@@ -16,6 +16,7 @@ interface HeaderProps {
   breadcrumbs: Array<{ path?: string; title: string }>;
   onLogout: () => Promise<void> | void;
   onNavigate: (path: string) => void;
+  requestLoading?: boolean;
   username?: string;
 }
 
@@ -27,6 +28,7 @@ export function Header({
   breadcrumbs,
   onLogout,
   onNavigate,
+  requestLoading = false,
   username = "Admin",
 }: HeaderProps) {
   const switchRef = useRef<HTMLSpanElement>(null);
@@ -131,6 +133,13 @@ export function Header({
       />
 
       <Space size="middle">
+        {requestLoading ? (
+          <Space size={6}>
+            <Spin size="small" />
+            <span style={{ color: token.colorTextSecondary, fontSize: 12 }}>请求中</span>
+          </Space>
+        ) : null}
+
         <span ref={switchRef}>
           <Switch
             checkedChildren={<MoonOutlined />}

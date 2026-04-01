@@ -7,6 +7,7 @@ import type {
   AdminUserRecord,
   AuditLogRecord,
   CatchAllMode,
+  CloudflareApiTokenMode,
   DomainCatchAllSource,
   DomainAssetRecord,
   DomainRoutingProfileRecord,
@@ -21,6 +22,8 @@ import type {
   ExtractedEmailLink,
   RuleMatchInsight,
   MailboxRecord,
+  MailboxSyncRunRecord,
+  MailboxSyncStartResult,
   MailboxSyncResult,
   NotificationDeliveryRecord,
   NotificationDeliveryAttemptRecord,
@@ -37,7 +40,9 @@ import type {
   OverviewStats,
   PaginationPayload,
   ProjectBindingRecord,
+  RetentionJobAction,
   RetentionJobRunRecord,
+  RetentionJobRunSummary,
   ResolvedRetentionPolicy,
   RetentionPolicyRecord,
   RetentionPolicyScopeLevel,
@@ -60,6 +65,7 @@ export type {
   AdminUserRecord,
   AuditLogRecord,
   CatchAllMode,
+  CloudflareApiTokenMode,
   DomainCatchAllSource,
   DomainAssetRecord,
   DomainRoutingProfileRecord,
@@ -74,6 +80,8 @@ export type {
   ExtractedEmailLink,
   RuleMatchInsight,
   MailboxRecord,
+  MailboxSyncRunRecord,
+  MailboxSyncStartResult,
   MailboxSyncResult,
   NotificationDeliveryRecord,
   NotificationDeliveryAttemptRecord,
@@ -90,7 +98,9 @@ export type {
   OverviewStats,
   PaginationPayload,
   ProjectBindingRecord,
+  RetentionJobAction,
   RetentionJobRunRecord,
+  RetentionJobRunSummary,
   ResolvedRetentionPolicy,
   RetentionPolicyRecord,
   RetentionPolicyScopeLevel,
@@ -129,16 +139,21 @@ export interface DomainsPayload {
 }
 
 export interface DomainMutationPayload {
+  allow_catch_all_sync: boolean;
   allow_mailbox_route_sync: boolean;
   allow_new_mailboxes: boolean;
   catch_all_forward_to: string;
   catch_all_mode: CatchAllMode;
+  cloudflare_api_token?: string;
+  cloudflare_api_token_mode?: CloudflareApiTokenMode;
   domain: string;
   email_worker: string;
   environment_id?: number | null;
   is_enabled: boolean;
   is_primary: boolean;
+  mailbox_route_forward_to: string;
   note: string;
+  operation_note?: string;
   provider: string;
   project_id?: number | null;
   routing_profile_id?: number | null;
@@ -152,9 +167,18 @@ export interface DomainRoutingProfileMutationPayload {
   is_enabled: boolean;
   name: string;
   note: string;
+  operation_note?: string;
   project_id?: number | null;
   provider: string;
   slug?: string;
+}
+
+export interface DomainSyncPayload {
+  operation_note?: string;
+}
+
+export interface AuditOperationPayload {
+  operation_note?: string;
 }
 
 export interface LoginPayload {
@@ -211,6 +235,7 @@ export interface RetentionPolicyPayload {
   mailbox_pool_id?: number | null;
   mailbox_ttl_hours?: number | null;
   name: string;
+  operation_note?: string;
   project_id?: number | null;
 }
 
@@ -238,6 +263,7 @@ export interface NotificationMutationPayload {
   events: string[];
   is_enabled: boolean;
   name: string;
+  operation_note?: string;
   project_ids?: number[] | string;
   secret: string;
   target: string;
@@ -249,6 +275,7 @@ export interface AdminMutationPayload {
   display_name: string;
   is_enabled: boolean;
   note: string;
+  operation_note?: string;
   password?: string;
   project_ids?: number[] | string;
   role: AdminRole;
@@ -277,6 +304,7 @@ export interface ApiTokenMutationPayload {
   expires_at?: number | null;
   is_enabled: boolean;
   name: string;
+  operation_note?: string;
   permissions: ApiTokenPermission[] | string;
   project_ids?: number[] | string;
 }

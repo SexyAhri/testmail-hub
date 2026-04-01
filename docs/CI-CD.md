@@ -1,6 +1,6 @@
 # CI / CD 说明
 
-更新日期：2026-03-30
+更新日期：2026-04-01
 
 > 兼容性说明
 >
@@ -8,6 +8,14 @@
 > 这样可以避免线上自定义域名、Email Routing、Secrets 和 D1 绑定被立即打断。
 
 本项目当前统一使用 `GitHub Actions + Wrangler` 做持续集成与持续部署。
+
+如果你计划接入多个 Cloudflare 账号下的域名，请先阅读：
+
+- [Cloudflare 多账号域名部署说明](./CLOUDFLARE-MULTI-ACCOUNT.md)
+
+如果你只是想先快速找到部署相关文档入口，也可以先看：
+
+- [文档导航](./README.md)
 
 不推荐同时再启用 Cloudflare Git 直连自动部署，原因很简单：
 
@@ -62,6 +70,12 @@
 7. 同步 Worker Secrets
 8. 执行远程 D1 迁移
 9. 发布 Worker
+
+说明：
+
+- 当前 `deploy.yml` 仍然是单账号部署工作流
+- 它不会自动把 Worker 同时发布到多个 Cloudflare 账号
+- 多账号域名统一治理已经支持，但多账号多 Worker 发布需要你额外做矩阵工作流或多套环境
 
 并发策略：
 
@@ -305,7 +319,9 @@ npm run deploy
 
 ## 相关文档
 
+- [文档导航](./README.md)
 - [README](../README.md)
 - [GitHub Secrets 清单](./GITHUB-SECRETS.md)
+- [Cloudflare 多账号域名部署说明](./CLOUDFLARE-MULTI-ACCOUNT.md)
 - [产品与研发计划书](./产品与研发计划书.md)
 - [计划书实现对照表](./计划书实现对照表.md)

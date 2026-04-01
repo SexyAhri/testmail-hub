@@ -1,107 +1,126 @@
-# GitHub 提交说明 / Release Notes
+# GitHub 发布说明模板
 
-更新日期：2026-03-30
+更新日期：2026-04-01
 
-这份文档适合直接复制到 GitHub 提交说明、Pull Request 描述或 Release 页面。
+这份文档用于上传仓库、写 Pull Request、写 Release 页面时快速复用当前版本的对外文案。
 
-## 推荐品牌与仓库名
+## 推荐仓库简介
 
-- 产品名：`TestMail Hub`
-- GitHub 仓库名：`testmail-hub`
+```text
+团队测试邮箱与验证码中台，支持私有部署、域名资产治理、Webhook、API Token、生命周期策略与发信中心。
+```
+
+## 推荐 GitHub Topics
+
+```text
+cloudflare-workers
+d1
+react
+typescript
+email
+test-automation
+verification-code
+mailbox-management
+```
 
 ## 推荐提交标题
 
+### 如果这次主要是整理仓库并准备上传
+
 ```text
-feat: rebrand project to TestMail Hub and sync GitHub release docs
+docs: refresh upload-ready repository documentation
 ```
 
-## 推荐提交正文
+### 如果这次是功能发布
 
 ```text
-- rebrand product naming from Temp Mail Console to TestMail Hub
-- sync README, CI/CD, Secrets and roadmap docs with current implementation status
-- add GitHub-ready release notes for publishing this version
-- keep Cloudflare Worker name unchanged for deployment compatibility
+feat: ship latest governance and domain management updates
+```
+
+## 推荐 Pull Request 描述
+
+```md
+## 本次改动
+
+- 整理 README、部署文档、Secrets 清单和发布说明模板
+- 同步当前功能状态与计划书实现对照表
+- 收口上传前需要的文档入口与检查项
+
+## 验证
+
+- npm run typecheck
+- npm test
+- npm run build
 ```
 
 ## 推荐 Release 标题
 
 ```text
-TestMail Hub v0.5.0
+TestMail Hub v0.6.0
 ```
 
-如果你不想带版本号，也可以直接用：
+如果你暂时不想带版本号，也可以用：
 
 ```text
-TestMail Hub - Multi-domain asset center baseline
+TestMail Hub - Upload Ready Snapshot
 ```
 
-## 可直接发布的 Release Notes
+## 可直接复用的 Release Notes
 
 ```md
 ## 概览
 
-这一版把项目正式收敛为更符合定位的 **TestMail Hub**，整体口径统一到“团队测试邮箱与验证码中台 / 邮件资产管理后台 / 私有部署邮件平台”。
+TestMail Hub 是一套面向团队测试、自动化测试和私有部署场景的邮件接收、验证码提取与邮箱资产治理控制台。
 
-## 本次更新
+当前版本已经把收件、提取、规则、白名单、项目隔离、Webhook、API Token、生命周期策略、多域名资产和发信中心收进同一套后台。
 
-- 完成项目品牌统一，名称调整为 TestMail Hub
-- 更新 README、CI/CD、GitHub Secrets、计划书和实现对照表
-- 补齐适合 GitHub 发布的文档说明和仓库口径
-- 多域名资产中心继续推进，当前已支持：
-  - 域名资产管理
-  - 域名与项目 / 环境绑定
-  - 工作空间过滤域名池与推荐默认域名
-  - Catch-all 策略管理与同步
-  - 域名维度监控卡片、排行图表、接入概览
-- 项目 / 环境 / 邮箱池隔离已可用
-- 项目级 API Token 与 Webhook 已可用
-- Resend 发信中心、模板、联系人、发送记录已可用
+## 当前已具备的核心能力
 
-## 部署与兼容性
+- 邮件接收、正文存储、附件元数据与邮件详情查看
+- 验证码、登录链接、魔法链接和平台邮件识别
+- 规则中心、白名单、项目 / 环境 / 邮箱池隔离
+- 多域名资产中心与 Cloudflare Email Routing 同步
+- 托管 API Token、公共 API 与 Webhook
+- 生命周期策略中心、执行记录与保留治理
+- 发信中心、模板、联系人、发送记录与发送统计
+- 管理员体系、审计日志、系统日志与关键治理留痕
 
-- 当前仍推荐使用 GitHub Actions 作为唯一正式发布入口
-- GitHub Actions 部署不会自动清空线上 D1 数据库
-- 出于兼容性考虑，Cloudflare Worker 名仍保留为 `temp-email-worker`
-- 这意味着线上自定义域名、Email Routing、Secrets 和 D1 绑定不需要因为这次品牌调整立刻重配
+## 这一版值得关注的点
 
-## 当前版本定位
+- 文档已整理为上传友好结构，部署、Secrets、多账号方案和 Release 模板都有单独说明
+- 关键高风险删除动作已补齐“操作备注 -> 删除快照 -> 审计日志”链路
+- 多 Cloudflare 账号场景已有清晰边界说明和推荐部署方案
+- 当前仓库状态已同步到《计划书实现对照表》，更适合对外说明能力边界
 
-当前版本已经可以作为：
+## 部署与兼容性说明
 
-- 团队测试邮箱与验证码中台
-- 私有部署邮件资产管理后台
-- 自动化测试邮件平台
+- 当前仍推荐 GitHub Actions + Wrangler 作为正式发布入口
+- 默认部署流程不会自动清空线上 D1 数据库
+- Cloudflare Worker 名默认仍保持 `temp-email-worker`，避免影响现有自定义域名、Email Routing、Secrets 和 D1 绑定
+- 多账号域名治理已支持，但默认工作流仍是单账号发布
 
-## 下一步
+## 相关文档
 
-- 继续补完多域名策略中心
-- 抽象 routing profile / catch-all 独立模型
-- 推进团队治理和 retention 策略中心
+- README
+- docs/CI-CD.md
+- docs/GITHUB-SECRETS.md
+- docs/CLOUDFLARE-MULTI-ACCOUNT.md
+- docs/计划书实现对照表.md
 ```
 
-## 上传前建议
+## 上传前检查
 
-1. 确认 `.dev.vars` 没有提交
-2. 确认 `.wrangler/` 没有提交
-3. 确认 GitHub Secrets 已在仓库里配置好
-4. 如果要同步线上仓库改名，先确保你有该仓库管理员权限
+1. README 的功能描述、截图和文档链接可正常打开。
+2. `.dev.vars`、真实 Token、API Key、Session Secret 没有进入仓库。
+3. GitHub Actions 需要的 Secrets 已按 [GITHUB-SECRETS.md](./GITHUB-SECRETS.md) 配置。
+4. 如果要对外说明能力范围，先核对 [计划书实现对照表](./计划书实现对照表.md)。
+5. 如果要发 Release，先把上面的模板按本次版本改一遍，不要原样直接发。
 
-## 兼容性提示
+## 相关文档
 
-这次改的是：
-
-- 产品品牌
-- 文档口径
-- 包名
-- 本地仓库目录名建议
-- GitHub 仓库名建议
-
-这次刻意没改的是：
-
-- Cloudflare Worker 名 `temp-email-worker`
-
-原因：
-
-- 改 Worker 名会影响线上路由、自定义域名、Email Routing、Secrets 和 D1 绑定
-- 更适合单独安排一次维护窗口处理
+- [文档导航](./README.md)
+- [README](../README.md)
+- [CI/CD 说明](./CI-CD.md)
+- [GitHub Actions Secrets 清单](./GITHUB-SECRETS.md)
+- [Cloudflare 多账号域名部署说明](./CLOUDFLARE-MULTI-ACCOUNT.md)
+- [计划书实现对照表](./计划书实现对照表.md)

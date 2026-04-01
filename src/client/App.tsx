@@ -2,7 +2,7 @@ import { App as AntdApp, Layout, Spin, theme } from "antd";
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
-import { getDomains, getSession, login, logout } from "./api";
+import { getDomains, getSession, login, logout, subscribeRequestActivity } from "./api";
 import { APP_BROWSER_TITLE } from "./brand";
 import { Footer, Header, Sidebar, buildDefaultSidebarItems } from "./components";
 import type { LoginPayload, SessionPayload } from "./types";
@@ -10,25 +10,25 @@ import { normalizeApiError } from "./utils";
 
 const { Content } = Layout;
 
-const ApiDocsPage = lazy(() => import("./pages/ApiDocsPage"));
-const ApiTokensPage = lazy(() => import("./pages/ApiTokensPage"));
-const AdminsPage = lazy(() => import("./pages/AdminsPage"));
-const AuditLogsPage = lazy(() => import("./pages/AuditLogsPage"));
-const ArchivesPage = lazy(() => import("./pages/ArchivesPage"));
-const DashboardPage = lazy(() => import("./pages/DashboardPage"));
-const DomainsPage = lazy(() => import("./pages/DomainsPage"));
-const EmailDetailPage = lazy(() => import("./pages/EmailDetailPage"));
-const EmailsPage = lazy(() => import("./pages/EmailsPage"));
-const ErrorsPage = lazy(() => import("./pages/ErrorsPage"));
-const LoginPage = lazy(() => import("./pages/LoginPage"));
-const MailboxesPage = lazy(() => import("./pages/MailboxesPage"));
-const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
-const OutboundEmailsPage = lazy(() => import("./pages/OutboundEmailsPage"));
-const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
-const RetentionPoliciesPage = lazy(() => import("./pages/RetentionPoliciesPage"));
-const RulesPage = lazy(() => import("./pages/RulesPage"));
-const TrashPage = lazy(() => import("./pages/TrashPage"));
-const WhitelistPage = lazy(() => import("./pages/WhitelistPage"));
+const ApiDocsPage = lazy(() => import("./pages/api-docs/ApiDocsPage"));
+const ApiTokensPage = lazy(() => import("./pages/api-tokens/ApiTokensPage"));
+const AdminsPage = lazy(() => import("./pages/admins/AdminsPage"));
+const AuditLogsPage = lazy(() => import("./pages/audit-logs/AuditLogsPage"));
+const ArchivesPage = lazy(() => import("./pages/archives/ArchivesPage"));
+const DashboardPage = lazy(() => import("./pages/dashboard/DashboardPage"));
+const DomainsPage = lazy(() => import("./pages/domains/DomainsPage"));
+const EmailDetailPage = lazy(() => import("./pages/email-detail/EmailDetailPage"));
+const EmailsPage = lazy(() => import("./pages/emails/EmailsPage"));
+const ErrorsPage = lazy(() => import("./pages/errors/ErrorsPage"));
+const LoginPage = lazy(() => import("./pages/login/LoginPage"));
+const MailboxesPage = lazy(() => import("./pages/mailboxes/MailboxesPage"));
+const NotificationsPage = lazy(() => import("./pages/notifications/NotificationsPage"));
+const OutboundEmailsPage = lazy(() => import("./pages/outbound/OutboundEmailsPage"));
+const ProjectsPage = lazy(() => import("./pages/projects/ProjectsPage"));
+const RetentionPoliciesPage = lazy(() => import("./pages/retention/RetentionPoliciesPage"));
+const RulesPage = lazy(() => import("./pages/rules/RulesPage"));
+const TrashPage = lazy(() => import("./pages/trash/TrashPage"));
+const WhitelistPage = lazy(() => import("./pages/whitelist/WhitelistPage"));
 
 type AuthStatus = "authenticated" | "guest" | "loading";
 
@@ -63,6 +63,7 @@ interface DashboardShellProps {
   onLogout: () => Promise<void>;
   onMailboxesChanged: () => Promise<void>;
   onUnauthorized: () => void;
+  requestLoading: boolean;
   user: SessionPayload["user"] | null;
 }
 
@@ -72,6 +73,7 @@ function DashboardShell({
   onLogout,
   onMailboxesChanged,
   onUnauthorized,
+  requestLoading,
   user,
 }: DashboardShellProps) {
   const { token } = theme.useToken();
@@ -80,13 +82,14 @@ function DashboardShell({
   const sidebarItems = useMemo(() => buildDefaultSidebarItems(user), [user]);
 
   return (
-    <Layout style={{ minHeight: "100vh", background: token.colorBgLayout }}>
+    <Layout style={{ minHeight: "100vh", height: "100vh", overflow: "hidden", background: token.colorBgLayout }}>
       <Sidebar items={sidebarItems} pathname={location.pathname} onNavigate={path => navigate(path)} />
-      <Layout style={{ background: token.colorBgLayout }}>
+      <Layout style={{ background: token.colorBgLayout, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
         <Header
           breadcrumbs={getBreadcrumbs(location.pathname)}
           onLogout={onLogout}
           onNavigate={path => navigate(path)}
+          requestLoading={requestLoading}
           username={user?.display_name || user?.username || "Admin"}
         />
         <Content
@@ -95,6 +98,10 @@ function DashboardShell({
             background: token.colorBgContainer,
             borderRadius: token.borderRadius,
             minHeight: 280,
+            flex: "1 1 0",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
           }}
         >
           <Suspense
@@ -104,16 +111,16 @@ function DashboardShell({
               </div>
             )}
           >
-            <div key={location.pathname} className="page-content">
+            <div key={location.pathname} className="page-content app-shell-page-content">
               <Routes>
                 <Route path="/" element={<Navigate to="/monitor" replace />} />
                 <Route path="/monitor" element={<DashboardPage domains={domains} mailboxDomain={mailboxDomain} onUnauthorized={onUnauthorized} />} />
                 <Route path="/projects" element={<ProjectsPage currentUser={user} onUnauthorized={onUnauthorized} />} />
                 <Route path="/domains" element={<DomainsPage currentUser={user} onDomainsChanged={onMailboxesChanged} onUnauthorized={onUnauthorized} />} />
-                <Route path="/emails" element={<EmailsPage domains={domains} onUnauthorized={onUnauthorized} />} />
-                <Route path="/emails/:messageId" element={<EmailDetailPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/archives" element={<ArchivesPage onUnauthorized={onUnauthorized} />} />
-                <Route path="/trash" element={<TrashPage onUnauthorized={onUnauthorized} />} />
+                <Route path="/emails" element={<EmailsPage currentUser={user} domains={domains} onUnauthorized={onUnauthorized} />} />
+                <Route path="/emails/:messageId" element={<EmailDetailPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/archives" element={<ArchivesPage currentUser={user} onUnauthorized={onUnauthorized} />} />
+                <Route path="/trash" element={<TrashPage currentUser={user} onUnauthorized={onUnauthorized} />} />
                 <Route path="/retention" element={<RetentionPoliciesPage currentUser={user} onUnauthorized={onUnauthorized} />} />
                 <Route path="/rules" element={<RulesPage currentUser={user} onUnauthorized={onUnauthorized} />} />
                 <Route path="/whitelist" element={<WhitelistPage currentUser={user} onUnauthorized={onUnauthorized} />} />
@@ -142,6 +149,7 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
   const [loginLoading, setLoginLoading] = useState(false);
   const [mailboxDomain, setMailboxDomain] = useState("");
+  const [requestLoading, setRequestLoading] = useState(false);
   const [domains, setDomains] = useState<string[]>([]);
   const [user, setUser] = useState<SessionPayload["user"] | null>(null);
 
@@ -149,6 +157,8 @@ export default function App() {
     document.title = APP_BROWSER_TITLE;
     void hydrateSession(true);
   }, []);
+
+  useEffect(() => subscribeRequestActivity(count => setRequestLoading(count > 0)), []);
 
   async function refreshDomains() {
     try {
@@ -262,6 +272,7 @@ export default function App() {
         onLogout={handleLogout}
         onMailboxesChanged={refreshDomains}
         onUnauthorized={() => handleUnauthorized()}
+        requestLoading={requestLoading}
         user={user}
       />
     </BrowserRouter>

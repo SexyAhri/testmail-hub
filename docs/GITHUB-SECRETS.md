@@ -1,10 +1,18 @@
 # GitHub Actions Secrets 清单
 
-更新日期：2026-03-30
+更新日期：2026-04-01
 
 这份文档用于整理当前仓库 `Deploy` 工作流真正会读取的 Secrets，方便直接复制到：
 
 `GitHub Repository -> Settings -> Secrets and variables -> Actions`
+
+如果你要管理多个 Cloudflare 账号下的域名，请结合阅读：
+
+- [Cloudflare 多账号域名部署说明](./CLOUDFLARE-MULTI-ACCOUNT.md)
+
+如果你还没看过文档总览，建议同时打开：
+
+- [文档导航](./README.md)
 
 ## 一份可直接复制的最终清单
 
@@ -165,6 +173,12 @@ RESEND_DEFAULT_REPLY_TO=<Optional Reply-To>
 
 这两个主要是给 GitHub Actions / Wrangler 本身用的。
 
+补充说明：
+
+- 当前仓库默认只发布到一个 Cloudflare 账号
+- 多账号域名治理是通过“域名资产里的独立 Token / Zone 配置”实现的
+- 域名级 `邮箱路由转发到` 是后台配置项，不是 GitHub Secret
+
 ## 生成建议
 
 不要把真实值交给别人代填，建议你自己生成。
@@ -233,5 +247,7 @@ openssl rand -base64 32
 
 ## 相关文档
 
+- [文档导航](./README.md)
 - [README](../README.md)
 - [CI/CD 说明](./CI-CD.md)
+- [Cloudflare 多账号域名部署说明](./CLOUDFLARE-MULTI-ACCOUNT.md)

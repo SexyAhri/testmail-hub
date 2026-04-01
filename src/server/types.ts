@@ -46,6 +46,7 @@ export type AccessScope = "all" | "bound";
 export type AuthKind = "bootstrap_token" | "admin_user";
 export type ApiTokenPermission = "read:attachment" | "read:code" | "read:mail" | "read:rule-result";
 export type CatchAllMode = "inherit" | "enabled" | "disabled";
+export type CloudflareApiTokenMode = "global" | "domain";
 export type DomainCatchAllSource = "domain" | "inherit" | "routing_profile";
 
 export interface AuthSession {
@@ -163,6 +164,7 @@ export interface WorkspaceProjectRecord {
   mailbox_count: number;
   mailbox_pool_count: number;
   name: string;
+  resolved_retention: ResolvedRetentionPolicy;
   slug: string;
   updated_at: number;
 }
@@ -178,6 +180,7 @@ export interface WorkspaceEnvironmentRecord {
   project_id: number;
   project_name: string;
   project_slug: string;
+  resolved_retention: ResolvedRetentionPolicy;
   slug: string;
   updated_at: number;
 }
@@ -195,6 +198,7 @@ export interface MailboxPoolRecord {
   project_id: number;
   project_name: string;
   project_slug: string;
+  resolved_retention: ResolvedRetentionPolicy;
   slug: string;
   updated_at: number;
 }
@@ -218,6 +222,7 @@ export interface EmailSummary extends WorkspaceScope {
   primary_mailbox_address: string;
   preview: string;
   received_at: number;
+  resolved_retention: ResolvedRetentionPolicy;
   result_count: number;
   subject: string;
   tags: string[];
@@ -264,11 +269,17 @@ export interface MailboxRecord extends WorkspaceScope {
   last_received_at: number | null;
   note: string;
   receive_count: number;
+  resolved_retention: ResolvedRetentionPolicy;
   tags: string[];
   updated_at: number;
 }
 
 export type RetentionPolicyScopeLevel = "global" | "project" | "environment" | "mailbox_pool";
+export type RetentionJobAction =
+  | "expire_mailboxes"
+  | "archive_emails"
+  | "purge_active_emails"
+  | "purge_deleted_emails";
 
 export interface RetentionPolicyRecord extends WorkspaceScope {
   archive_email_hours: number | null;
@@ -314,14 +325,43 @@ export interface RetentionJobRunRecord {
   trigger_source: string;
 }
 
+export interface RetentionJobRunSummary {
+  average_duration_ms_24h: number | null;
+  consecutive_failure_count: number;
+  last_failed_at: number | null;
+  last_run: {
+    duration_ms: number | null;
+    finished_at: number | null;
+    id: number;
+    started_at: number;
+    status: RetentionJobRunRecord["status"];
+    trigger_source: string;
+  } | null;
+  last_success_at: number | null;
+  recent_24h_archived_email_count: number;
+  recent_24h_expired_mailbox_count: number;
+  recent_24h_failed_count: number;
+  recent_24h_purged_active_email_count: number;
+  recent_24h_purged_deleted_email_count: number;
+  recent_24h_run_count: number;
+  recent_24h_scanned_email_count: number;
+  recent_24h_success_count: number;
+  total_failed_count: number;
+  total_run_count: number;
+  total_success_count: number;
+}
+
 export interface DomainAssetRecord {
+  allow_catch_all_sync: boolean;
   allow_mailbox_route_sync: boolean;
   allow_new_mailboxes: boolean;
   catch_all_forward_to: string;
   catch_all_mode: CatchAllMode;
+  cloudflare_api_token_configured: boolean;
   created_at: number;
   domain: string;
   email_worker: string;
+  mailbox_route_forward_to: string;
   environment_id: number | null;
   environment_name: string;
   environment_slug: string;
@@ -343,8 +383,13 @@ export interface DomainAssetRecord {
   zone_id: string;
 }
 
+export interface DomainAssetSecretRecord extends DomainAssetRecord {
+  cloudflare_api_token: string;
+}
+
 export interface DomainAssetStatusRecord {
   active_mailbox_total: number;
+  allow_catch_all_sync: boolean;
   allow_mailbox_route_sync: boolean;
   allow_new_mailboxes: boolean;
   catch_all_drift: boolean;
@@ -358,6 +403,11 @@ export interface DomainAssetStatusRecord {
   cloudflare_routes_total: number;
   domain: string;
   email_total: number;
+  mailbox_route_drift: boolean;
+  mailbox_route_enabled_total: number;
+  mailbox_route_expected_total: number;
+  mailbox_route_extra_total: number;
+  mailbox_route_missing_total: number;
   observed_mailbox_total: number;
   provider: string;
   routing_profile_name: string;
@@ -397,6 +447,27 @@ export interface MailboxSyncResult {
   observed_total: number;
   skipped_count: number;
   updated_count: number;
+}
+
+export type MailboxSyncRunStatus = "pending" | "running" | "success" | "failed";
+
+export interface MailboxSyncRunRecord extends MailboxSyncResult {
+  created_at: number;
+  duration_ms: number | null;
+  error_message: string;
+  finished_at: number | null;
+  id: number;
+  requested_by: string;
+  started_at: number;
+  status: MailboxSyncRunStatus;
+  trigger_source: string;
+  updated_at: number;
+}
+
+export interface MailboxSyncStartResult {
+  job_id: number;
+  started_at: number;
+  status: MailboxSyncRunStatus;
 }
 
 export interface ProjectBindingRecord {

@@ -1,0 +1,2 @@
+ALTER TABLE domains
+ADD COLUMN allow_catch_all_sync INTEGER NOT NULL DEFAULT 1;

@@ -33,6 +33,7 @@ import type {
   MailboxRecord,
   ApiTokenPermission,
   AuthSession,
+  RetentionJobAction,
   WorkerEnv,
   WorkerExecutionContext,
   WorkerEmailMessage,
@@ -41,11 +42,65 @@ import type {
 const MAX_RETENTION_DETAIL_EMAILS = 50;
 const MAX_RETENTION_DETAIL_SCOPES = 50;
 const MAX_RETENTION_DETAIL_MAILBOXES = 50;
-const SCHEDULED_RETENTION_ACTOR = {
+export const ALL_RETENTION_JOB_ACTIONS: RetentionJobAction[] = [
+  "expire_mailboxes",
+  "archive_emails",
+  "purge_active_emails",
+  "purge_deleted_emails",
+];
+
+function isRetentionJobAction(value: unknown): value is RetentionJobAction {
+  return ALL_RETENTION_JOB_ACTIONS.includes(value as RetentionJobAction);
+}
+
+export function normalizeRetentionJobActions(
+  value: unknown,
+  fallback: RetentionJobAction[] = ALL_RETENTION_JOB_ACTIONS,
+): RetentionJobAction[] {
+  if (!Array.isArray(value)) return [...fallback];
+
+  const normalized = Array.from(new Set(value.filter(isRetentionJobAction)));
+  return normalized.length > 0 ? normalized : [...fallback];
+}
+const SYSTEM_RETENTION_TRIGGER = {
+  access_scope: "all" as const,
+  auth_kind: "system",
   display_name: "系统留存任务",
+  is_system: true,
   role: "owner" as const,
   user_id: "system-retention",
+  username: "system-retention",
 };
+const SCHEDULED_RETENTION_ACTOR = {
+  display_name: SYSTEM_RETENTION_TRIGGER.display_name,
+  role: SYSTEM_RETENTION_TRIGGER.role,
+  user_id: SYSTEM_RETENTION_TRIGGER.user_id,
+};
+
+export function buildRetentionTriggerContext(
+  triggerSource: "manual" | "scheduled",
+  actor?: Pick<AuthSession, "access_scope" | "auth_kind" | "display_name" | "role" | "user_id" | "username"> | null,
+) {
+  if (triggerSource === "manual" && actor) {
+    return {
+      trigger_source: triggerSource,
+      triggered_by: {
+        access_scope: actor.access_scope || "all",
+        auth_kind: actor.auth_kind,
+        display_name: actor.display_name,
+        is_system: false,
+        role: actor.role,
+        user_id: actor.user_id,
+        username: actor.username,
+      },
+    };
+  }
+
+  return {
+    trigger_source: triggerSource,
+    triggered_by: SYSTEM_RETENTION_TRIGGER,
+  };
+}
 
 function toRetentionEmailSample(record: RetentionAffectedEmailRecord) {
   return {
@@ -79,7 +134,35 @@ function toRetentionScopeSummarySample(record: RetentionScopeSummaryRecord) {
   };
 }
 
+function createEmptyRetentionPurgeSummary() {
+  return {
+    affected_project_ids: [] as number[],
+    applied_policy_count: 0,
+    archived_email_count: 0,
+    archived_emails: [] as RetentionAffectedEmailRecord[],
+    purged_active_email_count: 0,
+    purged_active_emails: [] as RetentionAffectedEmailRecord[],
+    purged_deleted_email_count: 0,
+    purged_deleted_emails: [] as RetentionAffectedEmailRecord[],
+    scanned_email_count: 0,
+    scope_summaries: [] as RetentionScopeSummaryRecord[],
+  };
+}
+
+function collectRetentionAffectedProjectIds(
+  summary: { affected_project_ids: number[] },
+  expiredMailboxes: MailboxRecord[],
+) {
+  return Array.from(new Set([
+    ...summary.affected_project_ids,
+    ...expiredMailboxes
+      .map(mailbox => mailbox.project_id)
+      .filter((projectId): projectId is number => typeof projectId === "number" && Number.isFinite(projectId)),
+  ])).sort((left, right) => left - right);
+}
+
 function buildRetentionExecutionDetail(input: {
+  actions: RetentionJobAction[];
   archived_emails: RetentionAffectedEmailRecord[];
   duration_ms: number;
   expired_mailboxes: MailboxRecord[];
@@ -97,8 +180,10 @@ function buildRetentionExecutionDetail(input: {
     purged_deleted_email_count: number;
     scanned_email_count: number;
   };
+  trigger_context: ReturnType<typeof buildRetentionTriggerContext>;
 }) {
   return {
+    ...input.trigger_context,
     affected_project_count: input.summary.affected_project_ids.length,
     affected_project_ids: input.summary.affected_project_ids,
     applied_policy_count: input.summary.applied_policy_count,
@@ -112,6 +197,7 @@ function buildRetentionExecutionDetail(input: {
     fallback_deleted_email_retention_hours: input.fallback_deleted_email_retention_hours,
     fallback_email_retention_hours: input.fallback_email_retention_hours,
     job_id: input.job_id || null,
+    requested_actions: input.actions,
     purged_active_email_count: input.summary.purged_active_email_count,
     purged_active_email_samples: input.purged_active_emails.slice(0, MAX_RETENTION_DETAIL_EMAILS).map(toRetentionEmailSample),
     purged_active_email_sample_truncated: input.purged_active_emails.length > MAX_RETENTION_DETAIL_EMAILS,
@@ -129,18 +215,46 @@ function buildRetentionExecutionDetail(input: {
 async function runRetentionMaintenance(
   env: WorkerEnv,
   triggerSource: "manual" | "scheduled",
+  actor?: Pick<AuthSession, "access_scope" | "auth_kind" | "display_name" | "role" | "user_id" | "username"> | null,
+  options: {
+    actions?: RetentionJobAction[];
+  } = {},
 ) {
   const retentionStartedAt = Date.now();
+  const triggerContext = buildRetentionTriggerContext(triggerSource, actor);
+  const auditActor = triggerSource === "manual" && actor ? actor : SCHEDULED_RETENTION_ACTOR;
+  const requestedActions = normalizeRetentionJobActions(options.actions);
+  const shouldExpireMailboxes = requestedActions.includes("expire_mailboxes");
+  const shouldArchiveEmails = requestedActions.includes("archive_emails");
+  const shouldPurgeActiveEmails = requestedActions.includes("purge_active_emails");
+  const shouldPurgeDeletedEmails = requestedActions.includes("purge_deleted_emails");
+  const hasEmailActions = shouldArchiveEmails || shouldPurgeActiveEmails || shouldPurgeDeletedEmails;
 
   try {
-    const retentionSummary = await applyRetentionPoliciesPurge(env.DB, {
-      deleted_email_retention_hours: PURGE_DELETED_EMAILS_AFTER_HOURS,
-      email_retention_hours: EXPIRED_EMAIL_RETENTION_HOURS,
-    });
-    const expiredMailboxes = await disableExpiredMailboxes(env.DB);
+    const retentionSummary = hasEmailActions
+      ? await applyRetentionPoliciesPurge(
+        env.DB,
+        {
+          deleted_email_retention_hours: PURGE_DELETED_EMAILS_AFTER_HOURS,
+          email_retention_hours: EXPIRED_EMAIL_RETENTION_HOURS,
+        },
+        {
+          archive_emails: shouldArchiveEmails,
+          purge_active_emails: shouldPurgeActiveEmails,
+          purge_deleted_emails: shouldPurgeDeletedEmails,
+        },
+      )
+      : createEmptyRetentionPurgeSummary();
+    const expiredMailboxes = shouldExpireMailboxes ? await disableExpiredMailboxes(env.DB) : [];
+    const affectedProjectIds = collectRetentionAffectedProjectIds(retentionSummary, expiredMailboxes);
+    const retentionExecutionSummary = {
+      ...retentionSummary,
+      affected_project_ids: affectedProjectIds,
+    };
     const retentionFinishedAt = Date.now();
     const retentionDurationMs = retentionFinishedAt - retentionStartedAt;
     const detailForRun = buildRetentionExecutionDetail({
+      actions: requestedActions,
       archived_emails: retentionSummary.archived_emails,
       duration_ms: retentionDurationMs,
       expired_mailboxes: expiredMailboxes,
@@ -149,7 +263,8 @@ async function runRetentionMaintenance(
       purged_active_emails: retentionSummary.purged_active_emails,
       purged_deleted_emails: retentionSummary.purged_deleted_emails,
       scope_summaries: retentionSummary.scope_summaries,
-      summary: retentionSummary,
+      summary: retentionExecutionSummary,
+      trigger_context: triggerContext,
     });
 
     const retentionJobId = await createRetentionJobRun(env.DB, {
@@ -169,6 +284,7 @@ async function runRetentionMaintenance(
     });
 
     const retentionDetail = buildRetentionExecutionDetail({
+      actions: requestedActions,
       archived_emails: retentionSummary.archived_emails,
       duration_ms: retentionDurationMs,
       expired_mailboxes: expiredMailboxes,
@@ -178,12 +294,13 @@ async function runRetentionMaintenance(
       purged_active_emails: retentionSummary.purged_active_emails,
       purged_deleted_emails: retentionSummary.purged_deleted_emails,
       scope_summaries: retentionSummary.scope_summaries,
-      summary: retentionSummary,
+      summary: retentionExecutionSummary,
+      trigger_context: triggerContext,
     });
 
     await addAuditLog(env.DB, {
       action: "retention.run.completed",
-      actor: SCHEDULED_RETENTION_ACTOR,
+      actor: auditActor,
       detail: retentionDetail,
       entity_id: retentionJobId > 0 ? String(retentionJobId) : String(retentionStartedAt),
       entity_type: "retention_job",
@@ -208,7 +325,7 @@ async function runRetentionMaintenance(
     }
 
     await sendEventNotifications(env.DB, "lifecycle.retention_completed", retentionDetail, {
-      project_ids: retentionSummary.affected_project_ids,
+      project_ids: affectedProjectIds,
     });
 
     for (const mailbox of expiredMailboxes) {
@@ -235,9 +352,11 @@ async function runRetentionMaintenance(
     const retentionFinishedAt = Date.now();
     const retentionDurationMs = retentionFinishedAt - retentionStartedAt;
     const retentionDetail = {
+      ...triggerContext,
       duration_ms: retentionDurationMs,
       fallback_deleted_email_retention_hours: PURGE_DELETED_EMAILS_AFTER_HOURS,
       fallback_email_retention_hours: EXPIRED_EMAIL_RETENTION_HOURS,
+      requested_actions: requestedActions,
     };
     const errorMessage = retentionError instanceof Error ? retentionError.message : String(retentionError || "");
     const retentionJobId = await createRetentionJobRun(env.DB, {
@@ -257,7 +376,7 @@ async function runRetentionMaintenance(
     });
     await addAuditLog(env.DB, {
       action: "retention.run.failed",
-      actor: SCHEDULED_RETENTION_ACTOR,
+      actor: auditActor,
       detail: {
         ...retentionDetail,
         error_message: errorMessage,
@@ -432,7 +551,7 @@ export default {
     }
   },
 
-  async fetch(request: Request, env: WorkerEnv) {
+  async fetch(request: Request, env: WorkerEnv, ctx: WorkerExecutionContext) {
     const url = new URL(request.url);
     const { pathname } = url;
     const method = request.method;
@@ -558,10 +677,13 @@ export default {
         }
         if (pathname === "/admin/domain-assets" && method === "POST") return handlers.handleAdminDomainAssetsPost(request, env.DB, actor);
         if (/^\/admin\/domain-assets\/\d+\/sync-catch-all$/.test(pathname) && method === "POST") {
-          return handlers.handleAdminDomainAssetsSyncCatchAll(pathname, env.DB, env, actor);
+          return handlers.handleAdminDomainAssetsSyncCatchAll(pathname, request, env.DB, env, actor);
+        }
+        if (/^\/admin\/domain-assets\/\d+\/sync-mailbox-routes$/.test(pathname) && method === "POST") {
+          return handlers.handleAdminDomainAssetsSyncMailboxRoutes(pathname, request, env.DB, env, actor);
         }
         if (pathname.startsWith("/admin/domain-assets/") && method === "PUT") return handlers.handleAdminDomainAssetsPut(pathname, request, env.DB, actor);
-        if (pathname.startsWith("/admin/domain-assets/") && method === "DELETE") return handlers.handleAdminDomainAssetsDelete(pathname, env.DB, actor);
+        if (pathname.startsWith("/admin/domain-assets/") && method === "DELETE") return handlers.handleAdminDomainAssetsDelete(pathname, request, env.DB, actor);
         if (pathname === "/admin/domain-routing-profiles" && method === "GET") {
           return handlers.handleAdminDomainRoutingProfilesGet(url, env.DB, actor);
         }
@@ -572,7 +694,7 @@ export default {
           return handlers.handleAdminDomainRoutingProfilesPut(pathname, request, env.DB, actor);
         }
         if (pathname.startsWith("/admin/domain-routing-profiles/") && method === "DELETE") {
-          return handlers.handleAdminDomainRoutingProfilesDelete(pathname, env.DB, actor);
+          return handlers.handleAdminDomainRoutingProfilesDelete(pathname, request, env.DB, actor);
         }
         if (pathname === "/admin/workspace/catalog" && method === "GET") {
           return handlers.handleAdminWorkspaceCatalog(url, env.DB, actor);
@@ -583,11 +705,32 @@ export default {
         if (pathname === "/admin/retention-jobs" && method === "GET") {
           return handlers.handleAdminRetentionJobRunsGet(url, env.DB, actor);
         }
+        if (pathname === "/admin/retention-jobs/summary" && method === "GET") {
+          return handlers.handleAdminRetentionJobRunSummaryGet(env.DB, actor);
+        }
         if (pathname === "/admin/retention-jobs/run" && method === "POST") {
           if (actor.access_scope === "bound") {
             return jsonError("project-scoped admin cannot access global observability", 403);
           }
-          const result = await runRetentionMaintenance(env, "manual");
+          const rawBody = await request.text();
+          let requestedActions = ALL_RETENTION_JOB_ACTIONS;
+          if (rawBody.trim()) {
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(rawBody);
+            } catch {
+              return jsonError("invalid JSON body", 400);
+            }
+
+            const payload = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+              ? parsed as Record<string, unknown>
+              : {};
+            requestedActions = normalizeRetentionJobActions(payload.actions);
+          }
+
+          const result = await runRetentionMaintenance(env, "manual", actor, {
+            actions: requestedActions,
+          });
           return json({
             detail: result.detail,
             job_id: result.job_id,
@@ -601,7 +744,7 @@ export default {
           return handlers.handleAdminRetentionPoliciesPut(pathname, request, env.DB, actor);
         }
         if (pathname.startsWith("/admin/retention-policies/") && method === "DELETE") {
-          return handlers.handleAdminRetentionPoliciesDelete(pathname, env.DB, actor);
+          return handlers.handleAdminRetentionPoliciesDelete(pathname, request, env.DB, actor);
         }
         if (pathname === "/admin/projects" && method === "POST") {
           return handlers.handleAdminProjectsPost(request, env.DB, actor);
@@ -610,7 +753,7 @@ export default {
           return handlers.handleAdminProjectsPut(pathname, request, env.DB, actor);
         }
         if (pathname.startsWith("/admin/projects/") && method === "DELETE") {
-          return handlers.handleAdminProjectsDelete(pathname, env.DB, actor);
+          return handlers.handleAdminProjectsDelete(pathname, request, env.DB, actor);
         }
         if (pathname === "/admin/environments" && method === "POST") {
           return handlers.handleAdminEnvironmentsPost(request, env.DB, actor);
@@ -619,7 +762,7 @@ export default {
           return handlers.handleAdminEnvironmentsPut(pathname, request, env.DB, actor);
         }
         if (pathname.startsWith("/admin/environments/") && method === "DELETE") {
-          return handlers.handleAdminEnvironmentsDelete(pathname, env.DB, actor);
+          return handlers.handleAdminEnvironmentsDelete(pathname, request, env.DB, actor);
         }
         if (pathname === "/admin/mailbox-pools" && method === "POST") {
           return handlers.handleAdminMailboxPoolsPost(request, env.DB, actor);
@@ -628,7 +771,7 @@ export default {
           return handlers.handleAdminMailboxPoolsPut(pathname, request, env.DB, actor);
         }
         if (pathname.startsWith("/admin/mailbox-pools/") && method === "DELETE") {
-          return handlers.handleAdminMailboxPoolsDelete(pathname, env.DB, actor);
+          return handlers.handleAdminMailboxPoolsDelete(pathname, request, env.DB, actor);
         }
         if (pathname === "/admin/stats/overview" && method === "GET") return handlers.handleAdminOverviewStats(env.DB, actor);
         if (pathname === "/admin/audit" && method === "GET") return handlers.handleAdminAuditLogs(url, env.DB, actor);
@@ -648,7 +791,7 @@ export default {
           return handlers.handleAdminEmailUnarchive(pathname, env.DB, actor);
         }
         if (/^\/admin\/emails\/[^/]+\/purge$/.test(pathname) && method === "DELETE") {
-          return handlers.handleAdminEmailPurge(pathname, env.DB, actor);
+          return handlers.handleAdminEmailPurge(pathname, request, env.DB, actor);
         }
         if (/^\/admin\/emails\/[^/]+\/attachments\/\d+$/.test(pathname) && method === "GET") {
           return handlers.handleAdminEmailAttachment(pathname, env.DB, actor);
@@ -657,14 +800,14 @@ export default {
           return handlers.handleAdminEmailDetail(pathname, env.DB, actor);
         }
         if (pathname.startsWith("/admin/emails/") && method === "DELETE") {
-          return handlers.handleAdminEmailDelete(pathname, env.DB, actor);
+          return handlers.handleAdminEmailDelete(pathname, request, env.DB, actor);
         }
 
         if (pathname === "/admin/rules" && method === "GET") return handlers.handleAdminRulesGet(url, env.DB);
         if (pathname === "/admin/rules" && method === "POST") return handlers.handleAdminRulesPost(request, env.DB, actor);
         if (pathname === "/admin/rules/test" && method === "POST") return handlers.handleAdminRulesTest(request, env.DB);
         if (pathname.startsWith("/admin/rules/") && method === "PUT") return handlers.handleAdminRulesPut(pathname, request, env.DB, actor);
-        if (pathname.startsWith("/admin/rules/") && method === "DELETE") return handlers.handleAdminRulesDelete(pathname, env.DB, actor);
+        if (pathname.startsWith("/admin/rules/") && method === "DELETE") return handlers.handleAdminRulesDelete(pathname, request, env.DB, actor);
 
         if (pathname === "/admin/whitelist/settings" && method === "GET") return handlers.handleAdminWhitelistSettingsGet(env.DB);
         if (pathname === "/admin/whitelist/settings" && method === "PUT") {
@@ -673,13 +816,19 @@ export default {
         if (pathname === "/admin/whitelist" && method === "GET") return handlers.handleAdminWhitelistGet(url, env.DB);
         if (pathname === "/admin/whitelist" && method === "POST") return handlers.handleAdminWhitelistPost(request, env.DB, actor);
         if (pathname.startsWith("/admin/whitelist/") && method === "PUT") return handlers.handleAdminWhitelistPut(pathname, request, env.DB, actor);
-        if (pathname.startsWith("/admin/whitelist/") && method === "DELETE") return handlers.handleAdminWhitelistDelete(pathname, env.DB, actor);
+        if (pathname.startsWith("/admin/whitelist/") && method === "DELETE") return handlers.handleAdminWhitelistDelete(pathname, request, env.DB, actor);
 
         if (pathname === "/admin/mailboxes" && method === "GET") return handlers.handleAdminMailboxesGet(url, env.DB, actor);
-        if (pathname === "/admin/mailboxes/sync" && method === "POST") return handlers.handleAdminMailboxesSync(env.DB, env, actor);
+        if (pathname === "/admin/mailboxes/sync-runs/latest" && method === "GET") {
+          return handlers.handleAdminMailboxSyncRunLatestGet(env.DB, actor);
+        }
+        if (/^\/admin\/mailboxes\/sync-runs\/\d+$/.test(pathname) && method === "GET") {
+          return handlers.handleAdminMailboxSyncRunGet(pathname, env.DB, actor);
+        }
+        if (pathname === "/admin/mailboxes/sync" && method === "POST") return handlers.handleAdminMailboxesSync(env.DB, env, actor, ctx);
         if (pathname === "/admin/mailboxes" && method === "POST") return handlers.handleAdminMailboxesPost(request, env.DB, env, actor);
         if (pathname.startsWith("/admin/mailboxes/") && method === "PUT") return handlers.handleAdminMailboxesPut(pathname, request, env.DB, env, actor);
-        if (pathname.startsWith("/admin/mailboxes/") && method === "DELETE") return handlers.handleAdminMailboxesDelete(pathname, env.DB, env, actor);
+        if (pathname.startsWith("/admin/mailboxes/") && method === "DELETE") return handlers.handleAdminMailboxesDelete(pathname, request, env.DB, env, actor);
 
         if (pathname === "/admin/admins" && method === "GET") return handlers.handleAdminAdminsGet(url, env.DB, actor);
         if (pathname === "/admin/admins" && method === "POST") return handlers.handleAdminAdminsPost(request, env.DB, actor);
@@ -709,11 +858,11 @@ export default {
           return handlers.handleAdminNotificationsTest(pathname, env.DB, actor);
         }
         if (pathname.startsWith("/admin/notifications/") && method === "PUT") return handlers.handleAdminNotificationsPut(pathname, request, env.DB, actor);
-        if (pathname.startsWith("/admin/notifications/") && method === "DELETE") return handlers.handleAdminNotificationsDelete(pathname, env.DB, actor);
+        if (pathname.startsWith("/admin/notifications/") && method === "DELETE") return handlers.handleAdminNotificationsDelete(pathname, request, env.DB, actor);
         if (pathname === "/admin/api-tokens" && method === "GET") return handlers.handleAdminApiTokensGet(url, env.DB, actor);
         if (pathname === "/admin/api-tokens" && method === "POST") return handlers.handleAdminApiTokensPost(request, env.DB, actor);
         if (pathname.startsWith("/admin/api-tokens/") && method === "PUT") return handlers.handleAdminApiTokensPut(pathname, request, env.DB, actor);
-        if (pathname.startsWith("/admin/api-tokens/") && method === "DELETE") return handlers.handleAdminApiTokensDelete(pathname, env.DB, actor);
+        if (pathname.startsWith("/admin/api-tokens/") && method === "DELETE") return handlers.handleAdminApiTokensDelete(pathname, request, env.DB, actor);
 
         if (pathname === "/admin/outbound/settings" && method === "GET") {
           return handlers.handleAdminOutboundSettingsGet(env.DB, env);
@@ -740,7 +889,7 @@ export default {
           return handlers.handleAdminOutboundEmailDetail(pathname, env.DB);
         }
         if (pathname.startsWith("/admin/outbound/emails/") && method === "DELETE") {
-          return handlers.handleAdminOutboundEmailsDelete(pathname, env.DB, actor);
+          return handlers.handleAdminOutboundEmailsDelete(pathname, request, env.DB, actor);
         }
         if (pathname === "/admin/outbound/templates" && method === "GET") {
           return handlers.handleAdminOutboundTemplatesGet(env.DB);
@@ -752,7 +901,7 @@ export default {
           return handlers.handleAdminOutboundTemplatesPut(pathname, request, env.DB, actor);
         }
         if (pathname.startsWith("/admin/outbound/templates/") && method === "DELETE") {
-          return handlers.handleAdminOutboundTemplatesDelete(pathname, env.DB, actor);
+          return handlers.handleAdminOutboundTemplatesDelete(pathname, request, env.DB, actor);
         }
         if (pathname === "/admin/outbound/contacts" && method === "GET") {
           return handlers.handleAdminOutboundContactsGet(env.DB);
@@ -764,7 +913,7 @@ export default {
           return handlers.handleAdminOutboundContactsPut(pathname, request, env.DB, actor);
         }
         if (pathname.startsWith("/admin/outbound/contacts/") && method === "DELETE") {
-          return handlers.handleAdminOutboundContactsDelete(pathname, env.DB, actor);
+          return handlers.handleAdminOutboundContactsDelete(pathname, request, env.DB, actor);
         }
 
         if (pathname.startsWith("/admin/export/") && method === "GET") {

@@ -13,6 +13,18 @@ import {
 
 export type CurrentUser = SessionPayload["user"] | null | undefined;
 
+interface AccessModeTagOptions {
+  projectScopedLabel?: string;
+  readOnlyLabel?: string;
+}
+
+interface WriteScopeNoticeOptions {
+  projectScopedDescription?: string;
+  projectScopedTitle?: string;
+  readOnlyDescription?: string;
+  readOnlyTitle?: string;
+}
+
 function normalizeProjectBindings(projects?: ProjectBindingRecord[]) {
   return Array.isArray(projects) ? projects : [];
 }
@@ -37,6 +49,26 @@ export function isProjectScopedUser(user: CurrentUser) {
 
 export function canWriteAnyResource(user: CurrentUser) {
   return Boolean(user) && !isReadOnlyUser(user);
+}
+
+export function canReadEmails(user: CurrentUser) {
+  if (!user) return false;
+  return hasAdminPermission(user.role, "emails:read", user.access_scope || "all");
+}
+
+export function canWriteEmails(user: CurrentUser) {
+  if (!user) return false;
+  return hasAdminPermission(user.role, "emails:write", user.access_scope || "all");
+}
+
+export function canDeleteEmails(user: CurrentUser) {
+  if (!user) return false;
+  return hasAdminPermission(user.role, "emails:delete", user.access_scope || "all");
+}
+
+export function canRestoreEmails(user: CurrentUser) {
+  if (!user) return false;
+  return hasAdminPermission(user.role, "emails:restore", user.access_scope || "all");
 }
 
 export function canManageGlobalSettings(user: CurrentUser) {
@@ -103,23 +135,55 @@ export function canManageRetentionPolicyRecord(
   return canManageProjectResource(user, record.project_id);
 }
 
-export function getReadonlyNotice(
+export function getAccessModeTag(
   user: CurrentUser,
-  resourceLabel: string,
+  options: AccessModeTagOptions = {},
 ) {
   if (isReadOnlyUser(user)) {
     return {
-      description: `当前账号为只读角色，${resourceLabel}页面仅支持查看，写操作入口已关闭。`,
-      title: `${resourceLabel}当前为只读模式`,
+      color: "gold",
+      label: options.readOnlyLabel || "只读视角",
     };
   }
 
   if (isProjectScopedUser(user)) {
     return {
-      description: `${resourceLabel}属于平台级资源，项目级管理员当前仅支持查看，不支持新增、编辑或删除。`,
-      title: `${resourceLabel}当前为项目级只读视角`,
+      color: "gold",
+      label: options.projectScopedLabel || "项目级视角",
     };
   }
 
   return null;
+}
+
+export function getWriteScopeNotice(
+  user: CurrentUser,
+  resourceLabel: string,
+  options: WriteScopeNoticeOptions = {},
+) {
+  if (isReadOnlyUser(user)) {
+    return {
+      description: options.readOnlyDescription || `当前账号为只读角色，${resourceLabel}页面仅支持查看，写操作入口已关闭。`,
+      title: options.readOnlyTitle || `${resourceLabel}当前为只读模式`,
+    };
+  }
+
+  if (isProjectScopedUser(user)) {
+    return {
+      description: options.projectScopedDescription || `当前账号只能管理已绑定项目内的${resourceLabel}资源，超出范围的数据会保持只读。`,
+      title: options.projectScopedTitle || `${resourceLabel}当前为项目级视角`,
+    };
+  }
+
+  return null;
+}
+
+export function getReadonlyNotice(
+  user: CurrentUser,
+  resourceLabel: string,
+) {
+  return getWriteScopeNotice(user, resourceLabel, {
+    projectScopedDescription: `${resourceLabel}属于平台级资源，项目级管理员当前仅支持查看，不支持新增、编辑或删除。`,
+    projectScopedTitle: `${resourceLabel}当前为项目级只读视角`,
+  });
 }

@@ -85,6 +85,7 @@ jobs:
           printf '%s' "$ADMIN_TOKEN" | npx wrangler secret put ADMIN_TOKEN
           printf '%s' "$API_TOKEN" | npx wrangler secret put API_TOKEN
           printf '%s' "$SESSION_SECRET" | npx wrangler secret put SESSION_SECRET
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then printf '%s' "$CLOUDFLARE_API_TOKEN" | npx wrangler secret put CLOUDFLARE_API_TOKEN; fi
           if [ -n "$FORWARD_TO" ]; then printf '%s' "$FORWARD_TO" | npx wrangler secret put FORWARD_TO; fi
           if [ -n "$MAILBOX_DOMAIN" ]; then printf '%s' "$MAILBOX_DOMAIN" | npx wrangler secret put MAILBOX_DOMAIN; fi
           if [ -n "$ALLOWED_API_ORIGINS" ]; then printf '%s' "$ALLOWED_API_ORIGINS" | npx wrangler secret put ALLOWED_API_ORIGINS; fi

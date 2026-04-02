@@ -143,7 +143,11 @@ function createRetentionLinkedQueryDb(): D1Database {
           if (query.includes("FROM retention_policies rp")) {
             return { results: policies };
           }
-          if (query.includes("SELECT emails.message_id") && query.includes("ORDER BY emails.received_at DESC")) {
+          if (
+            query.includes("FROM emails")
+            && query.includes("emails.message_id")
+            && query.includes("ORDER BY emails.received_at DESC")
+          ) {
             return { results: [emailRow] };
           }
           if (query.includes("SELECT id, filename, mime_type, disposition, content_id, size_bytes, is_stored FROM email_attachments")) {

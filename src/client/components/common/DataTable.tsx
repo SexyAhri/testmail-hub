@@ -54,7 +54,19 @@ export function DataTable<T extends object>({
     const footerHeight = document.querySelector(".ant-layout-footer")?.getBoundingClientRect().height || 0;
     const titleHeight = titleRef.current?.getBoundingClientRect().height || 0;
     const toolbarHeight = toolbarRef.current?.getBoundingClientRect().height || 0;
-    const paginationReserve = showPagination ? 64 : 12;
+    const tableHeaderHeight =
+      rootRef.current.querySelector(".ant-table-header")?.getBoundingClientRect().height
+      || rootRef.current.querySelector(".ant-table-thead")?.getBoundingClientRect().height
+      || 44;
+    const paginationHeight = showPagination
+      ? rootRef.current.querySelector(".ant-pagination")?.getBoundingClientRect().height || 40
+      : 0;
+    const scrollContainer = rootRef.current.querySelector<HTMLElement>(".ant-table-body")
+      || rootRef.current.querySelector<HTMLElement>(".ant-table-content");
+    const horizontalScrollbarHeight = scrollContainer
+      ? Math.max(0, scrollContainer.offsetHeight - scrollContainer.clientHeight)
+      : 0;
+    const tableFrameReserve = 16;
     const nextHeight = Math.floor(
       window.innerHeight
       - rootTop
@@ -62,7 +74,10 @@ export function DataTable<T extends object>({
       - viewportBottomOffset
       - titleHeight
       - toolbarHeight
-      - paginationReserve,
+      - tableHeaderHeight
+      - paginationHeight
+      - horizontalScrollbarHeight
+      - tableFrameReserve,
     );
 
     setAutoScrollY(Math.max(minScrollY, nextHeight));
@@ -117,6 +132,7 @@ export function DataTable<T extends object>({
   }, [
     autoFitViewport,
     autoPinHorizontalEdges,
+    hasHorizontalOverflow,
     recomputeAutoScrollY,
     recomputeHorizontalOverflow,
     dataSize,
@@ -202,6 +218,9 @@ export function DataTable<T extends object>({
         borderRadius: 12,
         border: `1px solid ${token.colorBorderSecondary}`,
         boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
         overflow: "hidden",
         ...style,
       }}

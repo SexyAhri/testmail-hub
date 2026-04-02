@@ -1,6 +1,6 @@
 # 文档导航
 
-更新日期：2026-04-01
+更新日期：2026-04-02
 
 这份索引用来说明当前仓库里的文档分别解决什么问题，方便上传前、自测前和部署前快速找到入口。
 
@@ -9,8 +9,17 @@
 ### 如果你是第一次看这个仓库
 
 1. [README](../README.md)
-2. [计划书实现对照表](./计划书实现对照表.md)
-3. [产品与研发计划书](./产品与研发计划书.md)
+2. [架构与代码组织说明](./ARCHITECTURE.md)
+3. [计划书实现对照表](./计划书实现对照表.md)
+4. [产品与研发计划书](./产品与研发计划书.md)
+
+### 如果你准备接手维护或继续开发
+
+1. [README](../README.md)
+2. [架构与代码组织说明](./ARCHITECTURE.md)
+3. [计划书实现对照表](./计划书实现对照表.md)
+4. [CI/CD 说明](./CI-CD.md)
+5. [GitHub Actions Secrets 清单](./GITHUB-SECRETS.md)
 
 ### 如果你准备部署
 
@@ -35,6 +44,9 @@
 - [GitHub Actions Secrets 清单](./GITHUB-SECRETS.md)
   - Deploy 工作流真正依赖的 Secrets、最小集合、完整推荐值
 
+- [架构与代码组织说明](./ARCHITECTURE.md)
+  - 当前真实代码结构、请求流、模块边界、扩展方式与维护建议
+
 - [Cloudflare 多账号域名部署说明](./CLOUDFLARE-MULTI-ACCOUNT.md)
   - 多 Cloudflare 账号下的域名治理边界、推荐部署方案、集中收件方式
 
@@ -50,6 +62,7 @@
 ## 上传前最少确认
 
 - README 的描述、截图和功能状态与当前代码一致
+- README 与 [架构与代码组织说明](./ARCHITECTURE.md) 中的目录结构要和当前仓库一致
 - `.dev.vars`、真实 Token、API Key、Session Secret 没有进入仓库
 - 如果要直接部署，GitHub Secrets 已按 [GITHUB-SECRETS.md](./GITHUB-SECRETS.md) 配好
 - 如果要写 Release，先把 [GitHub 发布说明模板](./GITHUB-RELEASE-NOTES.md) 按本次版本改一遍

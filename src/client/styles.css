@@ -122,6 +122,7 @@ body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .page-tab-stack {
@@ -179,6 +180,21 @@ body {
 .app-data-table .ant-table-cell .ant-space:not(.ant-space-vertical) {
   flex-wrap: nowrap !important;
   white-space: nowrap;
+}
+
+.app-data-table.ant-table-wrapper,
+.app-data-table .ant-spin-nested-loading,
+.app-data-table .ant-spin-container,
+.app-data-table .ant-table {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.app-data-table .ant-table-container {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .app-data-table .ant-table-cell .ant-space-item {

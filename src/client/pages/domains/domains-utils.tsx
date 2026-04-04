@@ -10,6 +10,7 @@ import {
   canRepairCatchAllDrift,
   canRepairMailboxRouteDrift,
   hasMailboxRouteMismatch,
+  isPureCatchAllDomainStatus,
   isGovernanceBlockedDomainStatus,
   resolveEffectiveCatchAllPolicy,
   type DomainHealthFilter,
@@ -25,6 +26,7 @@ import type {
   DomainRoutingProfileRecord,
   WorkspaceCatalog,
 } from "../../types";
+import type { DomainHierarchyEntry } from "./domain-hierarchy";
 
 export type DomainTabKey = "config" | "overview" | "routing-profiles" | "status";
 
@@ -115,8 +117,8 @@ export const CLOUDFLARE_TOKEN_MODE_OPTIONS: Array<{
   label: string;
   value: NonNullable<DomainMutationPayload["cloudflare_api_token_mode"]>;
 }> = [
-  { label: "使用全局 Token", value: "global" },
-  { label: "使用域名独立 Token", value: "domain" },
+  { label: "使用全局令牌", value: "global" },
+  { label: "使用域名独立令牌", value: "domain" },
 ];
 
 export const PROVIDER_CAPABILITY_LABELS: Record<DomainProviderCapability, string> = {
@@ -126,7 +128,7 @@ export const PROVIDER_CAPABILITY_LABELS: Record<DomainProviderCapability, string
   mailbox_route_sync: "路由同步",
   routing_profile: "路由策略",
   status_read: "状态观测",
-  zone_id: "Zone ID",
+  zone_id: "区域 ID",
 };
 
 export function renderCatchAllModeTokens(mode: CatchAllMode, forwardTo: string) {
@@ -209,11 +211,45 @@ export function renderProviderBadge(
   providers?: Map<string, DomainProviderDefinition>,
 ) {
   const definition = providers?.get(provider) || getDomainProviderDefinition(provider);
-  if (!definition) return <Tag>{provider || "未知 Provider"}</Tag>;
+  if (!definition) return <Tag>{provider || "未知服务商"}</Tag>;
 
   return (
     <Space size={[4, 4]} wrap>
       <Tag color={provider === "cloudflare" ? "processing" : "default"}>{definition.label}</Tag>
+    </Space>
+  );
+}
+
+export function renderDomainHierarchy(entry?: DomainHierarchyEntry | null) {
+  if (!entry) {
+    return <Tag>独立域名</Tag>;
+  }
+
+  const levelColor = entry.depth === 0 ? "blue" : entry.depth === 1 ? "processing" : "purple";
+  const levelLabel = entry.depth === 0 ? "根域名" : `第 ${entry.depth} 层子域名`;
+  const detailParts = entry.parentDomain
+    ? [`父域名 ${entry.parentDomain}`]
+    : [`根分组 ${entry.rootDomain}`];
+
+  if (entry.parentDomain && entry.rootDomain !== entry.parentDomain) {
+    detailParts.push(`根域名 ${entry.rootDomain}`);
+  }
+
+  if (entry.directChildCount > 0) {
+    detailParts.push(`直接子域名 ${entry.directChildCount}`);
+  }
+
+  return (
+    <Space direction="vertical" size={0}>
+      <Space size={[4, 4]} wrap>
+        <Tag color={levelColor}>{levelLabel}</Tag>
+        {entry.totalDescendantCount > entry.directChildCount ? (
+          <Tag color="geekblue">{`全部后代 ${entry.totalDescendantCount}`}</Tag>
+        ) : null}
+      </Space>
+      <span style={{ color: "#595959", fontFamily: "monospace", fontSize: 12 }}>
+        {detailParts.join(" · ")}
+      </span>
     </Space>
   );
 }
@@ -267,6 +303,7 @@ export function renderActualCatchAllStatus(record: DomainAssetStatusRecord) {
 export function renderMailboxRouteStatus(record: DomainAssetStatusRecord) {
   if (record.cloudflare_error) return <Tag color="error">异常</Tag>;
   if (!record.cloudflare_configured) return <Tag>未接入</Tag>;
+  if (isPureCatchAllDomainStatus(record)) return <Tag color="cyan">纯 Catch-all</Tag>;
   if (record.mailbox_route_drift) {
     return (
       <Space size={[4, 4]} wrap>

@@ -76,7 +76,7 @@ export function DomainsStatusTab({
           color="#fa8c16"
         />
         <MetricCard
-          title="策略待同步"
+          title="Catch-all 漂移"
           value={visibleDriftCount}
           icon={<SyncOutlined />}
           percent={buildRatio(visibleDriftCount, filteredStatusItems.length)}
@@ -188,8 +188,8 @@ export function DomainsStatusTab({
           <Alert
             type="warning"
             showIcon
-            message="检测到待同步的 Catch-all 策略"
-            description="本地配置已经保存，但 Cloudflare 侧还没有完全一致。你可以在配置表里按行同步，或者选中多条后批量同步。"
+            message="检测到 Catch-all 漂移"
+            description="本地 Catch-all 策略已经保存，但 Cloudflare 侧还没有完全一致。你可以在配置表里按行同步，或者选中多条后批量同步。"
           />
         ) : null}
 

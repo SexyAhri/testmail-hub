@@ -418,6 +418,7 @@ export function toOutboundEmailAuditSnapshot(input: {
   created_by: string;
   from_address: string;
   from_name: string;
+  html_body: string;
   last_attempt_at: number | null;
   provider: string;
   reply_to: string;
@@ -425,6 +426,7 @@ export function toOutboundEmailAuditSnapshot(input: {
   sent_at: number | null;
   status: string;
   subject: string;
+  text_body: string;
   to_addresses: string[];
 }) {
   return {
@@ -434,6 +436,7 @@ export function toOutboundEmailAuditSnapshot(input: {
     created_by: input.created_by,
     from_address: input.from_address,
     from_name: input.from_name,
+    html_body_length: input.html_body.length,
     last_attempt_at: input.last_attempt_at ?? null,
     provider: input.provider,
     reply_to: input.reply_to,
@@ -441,6 +444,7 @@ export function toOutboundEmailAuditSnapshot(input: {
     sent_at: input.sent_at ?? null,
     status: input.status,
     subject: input.subject,
+    text_body_length: input.text_body.length,
     to_addresses: normalizeAuditStringList(input.to_addresses),
   };
 }

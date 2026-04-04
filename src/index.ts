@@ -880,7 +880,7 @@ export default {
           return handlers.handleAdminOutboundEmailsPost(request, env.DB, env, actor);
         }
         if (/^\/admin\/outbound\/emails\/\d+\/send$/.test(pathname) && method === "POST") {
-          return handlers.handleAdminOutboundEmailSendExisting(pathname, env.DB, env, actor);
+          return handlers.handleAdminOutboundEmailSendExisting(pathname, request, env.DB, env, actor);
         }
         if (pathname.startsWith("/admin/outbound/emails/") && method === "PUT") {
           return handlers.handleAdminOutboundEmailsPut(pathname, request, env.DB, env, actor);

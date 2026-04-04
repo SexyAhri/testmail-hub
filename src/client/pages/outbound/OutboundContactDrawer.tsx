@@ -55,6 +55,15 @@ export function OutboundContactDrawer({
         </Form.Item>
       </Col>
       <Col span={24}>
+        <Form.Item
+          label="本次操作备注"
+          name="operation_note"
+          extra="这条说明不会写入联系人资料，只会进入审计日志。"
+        >
+          <TextArea rows={2} placeholder="例如：补录值班联系人、修正邮箱地址、整理联系人标签" />
+        </Form.Item>
+      </Col>
+      <Col span={24}>
         <Form.Item label="收藏联系人" name="is_favorite" valuePropName="checked">
           <Switch checkedChildren="收藏" unCheckedChildren="普通" />
         </Form.Item>

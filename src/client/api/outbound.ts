@@ -41,8 +41,8 @@ export async function updateOutboundEmail(id: number, payload: OutboundEmailPayl
   return request<OutboundEmailRecord>(`/admin/outbound/emails/${id}`, withJsonBody("PUT", payload));
 }
 
-export async function sendStoredOutboundEmail(id: number) {
-  return request<OutboundEmailRecord>(`/admin/outbound/emails/${id}/send`, { method: "POST" });
+export async function sendStoredOutboundEmail(id: number, payload?: AuditOperationPayload) {
+  return request<OutboundEmailRecord>(`/admin/outbound/emails/${id}/send`, withOptionalJsonBody("POST", payload));
 }
 
 export async function deleteOutboundEmail(id: number, payload?: AuditOperationPayload) {

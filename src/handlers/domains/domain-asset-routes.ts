@@ -692,6 +692,11 @@ export async function handleAdminDomainAssetsSyncMailboxRoutes(
     ),
   ).sort();
   const expectedAddressSet = new Set(expectedAddresses);
+  const effectivePolicy = resolveEffectiveDomainCatchAllPolicy(asset);
+
+  if (effectivePolicy.catch_all_mode === "enabled" && expectedAddresses.length === 0) {
+    return jsonError("pure catch-all domains do not manage explicit mailbox routes", 400);
+  }
 
   try {
     const snapshot = await getCloudflareMailboxSyncSnapshotByConfig(config);

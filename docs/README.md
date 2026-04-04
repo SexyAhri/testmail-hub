@@ -1,6 +1,6 @@
 # 文档导航
 
-更新日期：2026-04-02
+更新日期：2026-04-05
 
 这份索引用来说明当前仓库里的文档分别解决什么问题，方便上传前、自测前和部署前快速找到入口。
 
@@ -27,6 +27,13 @@
 2. [CI/CD 说明](./CI-CD.md)
 3. [Cloudflare 多账号域名部署说明](./CLOUDFLARE-MULTI-ACCOUNT.md)
 
+### 如果你准备继续做域名资产 / Cloudflare 治理
+
+1. [README](../README.md)
+2. [架构与代码组织说明](./ARCHITECTURE.md)
+3. [Cloudflare 多账号域名部署说明](./CLOUDFLARE-MULTI-ACCOUNT.md)
+4. [计划书实现对照表](./计划书实现对照表.md)
+
 ### 如果你准备上传仓库或发版
 
 1. [README](../README.md)
@@ -50,6 +57,9 @@
 - [Cloudflare 多账号域名部署说明](./CLOUDFLARE-MULTI-ACCOUNT.md)
   - 多 Cloudflare 账号下的域名治理边界、推荐部署方案、集中收件方式
 
+- [README](../README.md) 中的“域名资产中心速览”
+  - 适合先快速理解域名层级、Catch-all 继承规则、漂移和治理受阻这些页面概念
+
 - [计划书实现对照表](./计划书实现对照表.md)
   - 当前仓库已经落地的能力、仍未完成的能力、适合对外说明的实现状态
 
@@ -62,6 +72,7 @@
 ## 上传前最少确认
 
 - README 的描述、截图和功能状态与当前代码一致
+- README 里关于域名层级、漂移和多账号治理的描述与当前页面行为一致
 - README 与 [架构与代码组织说明](./ARCHITECTURE.md) 中的目录结构要和当前仓库一致
 - `.dev.vars`、真实 Token、API Key、Session Secret 没有进入仓库
 - 如果要直接部署，GitHub Secrets 已按 [GITHUB-SECRETS.md](./GITHUB-SECRETS.md) 配好

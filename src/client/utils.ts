@@ -75,6 +75,31 @@ export async function fileToBase64(file: File): Promise<string> {
   return base64;
 }
 
+export function downloadBase64File(
+  base64: string,
+  filename: string,
+  contentType = "application/octet-stream",
+) {
+  const raw = atob(String(base64 || ""));
+  const bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index += 1) {
+    bytes[index] = raw.charCodeAt(index);
+  }
+
+  const blob = new Blob([bytes], {
+    type: contentType || "application/octet-stream",
+  });
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = String(filename || "attachment").trim() || "attachment";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(objectUrl);
+}
+
 export interface BatchActionResult {
   errorMessages: string[];
   failureCount: number;

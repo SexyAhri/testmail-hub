@@ -1,8 +1,9 @@
-import { Descriptions, Space, Tag, Typography, theme } from "antd";
+import { DownloadOutlined } from "@ant-design/icons";
+import { Button, Descriptions, Space, Typography, theme } from "antd";
 
 import { DetailDrawer, TypeTag } from "../../components";
 import type { OutboundEmailRecord } from "../../types";
-import { formatBytes, formatDateTime } from "../../utils";
+import { downloadBase64File, formatBytes, formatDateTime } from "../../utils";
 import { STATUS_TAGS } from "./outbound-utils";
 
 const { Paragraph, Text } = Typography;
@@ -73,9 +74,24 @@ export function OutboundEmailDetailDrawer({
             <div style={{ marginTop: 8 }}>
               {detailRecord.attachments?.length ? (
                 detailRecord.attachments.map(item => (
-                  <Tag key={item.id}>
+                  <Space key={item.id} wrap style={{ width: "100%", justifyContent: "space-between" }}>
                     {item.filename} · {formatBytes(item.size_bytes)}
-                  </Tag>
+                    <Button
+                      icon={<DownloadOutlined />}
+                      type="link"
+                      disabled={!item.content_base64}
+                      onClick={() => {
+                        if (!item.content_base64) return;
+                        downloadBase64File(
+                          item.content_base64,
+                          item.filename || `attachment-${item.id}`,
+                          item.content_type || "application/octet-stream",
+                        );
+                      }}
+                    >
+                      Download
+                    </Button>
+                  </Space>
                 ))
               ) : (
                 <Text type="secondary">无附件</Text>

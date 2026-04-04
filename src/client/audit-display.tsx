@@ -37,6 +37,9 @@ export const ACTION_LABELS: Record<string, string> = {
   "outbound.contact.delete": "删除联系人",
   "outbound.contact.update": "更新联系人",
   "outbound.email.delete": "删除发信记录",
+  "outbound.email.save_draft": "保存发信草稿",
+  "outbound.email.schedule": "计划发送邮件",
+  "outbound.email.send": "发送邮件",
   "outbound.email.send_failed": "发信失败",
   "outbound.settings.update": "更新发信设置",
   "outbound.template.create": "新增模板",
@@ -199,10 +202,13 @@ function formatAuditChangedField(value: string) {
   if (value === "allow_mailbox_route_sync") return "路由同步";
   if (value === "allow_new_mailboxes") return "允许新建邮箱";
   if (value === "archive_email_hours") return "自动归档";
+  if (value === "attachment_count") return "附件数量";
+  if (value === "bcc_addresses") return "密送";
   if (value === "catch_all_enabled") return "Catch-all 状态";
   if (value === "catch_all_forward_to") return "Catch-all 转发地址";
   if (value === "cloudflare_routes_total") return "Cloudflare 路由总数";
   if (value === "catch_all_mode") return "Catch-all 策略";
+  if (value === "cc_addresses") return "抄送";
   if (value === "cloudflare_api_token_configured") return "独立 Token 配置";
   if (value === "cloudflare_api_token_mode") return "Token 来源";
   if (value === "deleted_email_retention_hours") return "已删邮件保留";
@@ -215,9 +221,16 @@ function formatAuditChangedField(value: string) {
   if (value === "extra_total") return "冗余路由数";
   if (value === "events") return "事件";
   if (value === "enabled_routes_total") return "启用路由数";
+  if (value === "email") return "邮箱地址";
   if (value === "expires_at") return "过期时间";
+  if (value === "from_address") return "发件地址";
+  if (value === "from_name") return "发件人名称";
+  if (value === "html_body_length") return "HTML 正文";
+  if (value === "html_template_length") return "HTML 模板";
   if (value === "is_enabled") return "状态";
+  if (value === "is_favorite") return "收藏状态";
   if (value === "is_primary") return "主域名";
+  if (value === "last_attempt_at") return "最近尝试时间";
   if (value === "mailbox_pool_id") return "邮箱池";
   if (value === "mailbox_route_forward_to") return "邮箱路由转发";
   if (value === "mailbox_ttl_hours") return "默认邮箱 TTL";
@@ -226,15 +239,26 @@ function formatAuditChangedField(value: string) {
   if (value === "permissions") return "权限";
   if (value === "project_id") return "项目";
   if (value === "project_ids") return "绑定项目";
-  if (value === "provider") return "Provider";
+  if (value === "provider") return "服务商";
+  if (value === "reply_to") return "Reply-To";
   if (value === "role") return "角色";
   if (value === "routing_profile_id") return "路由策略";
+  if (value === "scheduled_at") return "计划发送时间";
   if (value === "scope_key") return "作用域";
   if (value === "scope_level") return "作用层级";
   if (value === "secret_configured") return "签名 Secret";
+  if (value === "sent_at") return "发送时间";
   if (value === "slug") return "标识";
+  if (value === "status") return "发送状态";
+  if (value === "subject") return "主题";
+  if (value === "subject_template") return "主题模板";
   if (value === "target") return "目标地址";
+  if (value === "tags") return "标签";
+  if (value === "text_body_length") return "文本正文";
+  if (value === "text_template_length") return "文本模板";
   if (value === "type") return "类型";
+  if (value === "to_addresses") return "收件人";
+  if (value === "variables") return "变量列表";
   if (value === "zone_id") return "Zone ID";
   return value;
 }
@@ -382,7 +406,7 @@ function renderRetentionRunSummary(detail: Record<string, unknown>, action: stri
       {triggerName || errorMessage ? (
         <span style={{ color: "#8c8c8c", fontSize: 12 }}>
           {triggerName ? `触发人: ${triggerName}` : ""}
-          {triggerName && errorMessage ? " 路 " : ""}
+          {triggerName && errorMessage ? " · " : ""}
           {errorMessage ? `错误: ${errorMessage}` : ""}
         </span>
       ) : null}
@@ -490,8 +514,9 @@ function renderGenericSummary(record: AuditLogRecord) {
   const environmentName = readString(detail, "environment_name");
   if (environmentName) metadata.push(`环境: ${environmentName}`);
   const operationNote = readString(detail, "operation_note");
+  const errorMessage = readString(detail, "error") || readString(detail, "error_message");
 
-  const description = metadata.join(" 路 ");
+  const description = metadata.join(" · ");
 
   return (
     <Space direction="vertical" size={4}>
@@ -503,6 +528,9 @@ function renderGenericSummary(record: AuditLogRecord) {
         <span style={{ color: "#8c8c8c", fontSize: 12 }}>
           变更字段: {changedFields.map(formatAuditChangedField).join("、")}
         </span>
+      ) : null}
+      {errorMessage ? (
+        <span style={{ color: "#8c8c8c", fontSize: 12 }}>错误: {errorMessage}</span>
       ) : null}
       {operationNote ? (
         <span style={{ color: "#8c8c8c", fontSize: 12 }}>操作备注: {operationNote}</span>

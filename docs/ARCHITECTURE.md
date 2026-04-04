@@ -1,6 +1,6 @@
 # TestMail Hub 架构与代码组织说明
 
-更新日期：2026-04-02
+更新日期：2026-04-05
 
 这份文档面向准备接手维护、继续开发或做二次集成的人，重点解释当前仓库的代码组织、主要运行链路、模块边界和推荐扩展方式。
 
@@ -79,9 +79,12 @@ TestMail Hub 当前是一套典型的 Cloudflare Worker 单服务架构：
 1. 后台域名页或邮箱页发起同步请求。
 2. `handlers/domains` 或 `handlers/mailboxes` 接收请求。
 3. [src/core/mailbox-sync.ts](../src/core/mailbox-sync.ts) 读取域名资产、路由策略、邮箱列表和治理规则。
-4. 根据 provider 能力定义决定是否执行 Catch-all、邮箱路由或状态探测。
-5. 同步结果和运行记录写入 D1。
-6. 审计日志记录操作备注、变更前后快照和变更字段摘要。
+4. 域名状态查询会先解析“当前生效的 Catch-all 策略来源”，顺序是“域名直配优先，否则继承 routing profile，否则继承现状”。
+5. 根据 provider 能力定义决定是否执行 Catch-all、邮箱路由或状态探测。
+6. 状态读取阶段会对比“本地期望状态”和“Cloudflare 实际状态”，生成 `catch_all_drift` 与 `mailbox_route_drift`。
+7. 前端域名页再基于这些状态区分“可自动修复”“治理受阻”“接入异常”“待补齐接入”等治理焦点。
+8. 同步结果和运行记录写入 D1。
+9. 审计日志记录操作备注、变更前后快照和变更字段摘要。
 
 ## 3. 代码目录说明
 
@@ -259,16 +262,21 @@ TestMail Hub 当前是一套典型的 Cloudflare Worker 单服务架构：
 域名治理相关实体主要包括：
 
 - domain asset
+- domain hierarchy（前端根据已录入域名推导出的管理视图）
 - routing profile
 - provider definition
 - governance flags
+- effective Catch-all policy source
 - sync runs / drift state
 
 这条链路会影响：
 
+- 域名和子域名在控制台里的分组方式
 - 邮箱创建是否允许使用某域名
+- Catch-all 最终是来自域名直配、routing profile 还是继承现状
 - Catch-all 是否允许管理
 - 邮箱路由是否允许同步
+- Catch-all / 邮箱路由漂移是否可直接修复
 - 多 Cloudflare 账号下的域名接入方式
 
 ### 4.3 治理与权限骨架

@@ -77,10 +77,18 @@ export function canSyncCatchAll(
 
 export function canSyncMailboxRoutes(
   record: Pick<DomainAssetRecord, "allow_mailbox_route_sync" | "is_enabled" | "provider">,
+  status?: Partial<Pick<DomainAssetStatusRecord, "catch_all_mode" | "mailbox_route_expected_total">> | null,
 ) {
   return record.is_enabled
     && record.allow_mailbox_route_sync
-    && domainProviderSupports(record.provider, "mailbox_route_sync");
+    && domainProviderSupports(record.provider, "mailbox_route_sync")
+    && !isPureCatchAllDomainStatus(status);
+}
+
+export function isPureCatchAllDomainStatus(
+  record: Partial<Pick<DomainAssetStatusRecord, "catch_all_mode" | "mailbox_route_expected_total">> | null | undefined,
+) {
+  return record?.catch_all_mode === "enabled" && Number(record.mailbox_route_expected_total || 0) === 0;
 }
 
 export function canRepairCatchAllDrift(
@@ -111,12 +119,18 @@ export function canRepairMailboxRouteDrift(
   asset: Pick<DomainAssetRecord, "allow_mailbox_route_sync" | "is_enabled" | "provider"> | null | undefined,
   record: Pick<
     DomainAssetStatusRecord,
-    "cloudflare_configured" | "cloudflare_error" | "mailbox_route_drift" | "mailbox_route_extra_total" | "mailbox_route_missing_total"
+    | "catch_all_mode"
+    | "cloudflare_configured"
+    | "cloudflare_error"
+    | "mailbox_route_drift"
+    | "mailbox_route_expected_total"
+    | "mailbox_route_extra_total"
+    | "mailbox_route_missing_total"
   >,
 ) {
   return Boolean(
     asset
-      && canSyncMailboxRoutes(asset)
+      && canSyncMailboxRoutes(asset, record)
       && hasMailboxRouteMismatch(record)
       && !record.cloudflare_error
       && record.cloudflare_configured,
@@ -124,8 +138,12 @@ export function canRepairMailboxRouteDrift(
 }
 
 export function hasMailboxRouteMismatch(
-  record: Pick<DomainAssetStatusRecord, "mailbox_route_drift" | "mailbox_route_extra_total" | "mailbox_route_missing_total">,
+  record: Pick<
+    DomainAssetStatusRecord,
+    "catch_all_mode" | "mailbox_route_drift" | "mailbox_route_expected_total" | "mailbox_route_extra_total" | "mailbox_route_missing_total"
+  >,
 ) {
+  if (isPureCatchAllDomainStatus(record)) return false;
   return record.mailbox_route_drift || record.mailbox_route_missing_total > 0 || record.mailbox_route_extra_total > 0;
 }
 
@@ -146,9 +164,11 @@ export function isGovernanceBlockedDomainStatus(
   record: Pick<
     DomainAssetStatusRecord,
     | "catch_all_drift"
+    | "catch_all_mode"
     | "cloudflare_configured"
     | "cloudflare_error"
     | "mailbox_route_drift"
+    | "mailbox_route_expected_total"
     | "mailbox_route_extra_total"
     | "mailbox_route_missing_total"
   >,
@@ -271,9 +291,11 @@ export function matchesDomainHealthFilter(
   record: Pick<
     DomainAssetStatusRecord,
     | "catch_all_drift"
+    | "catch_all_mode"
     | "cloudflare_configured"
     | "cloudflare_error"
     | "mailbox_route_drift"
+    | "mailbox_route_expected_total"
     | "mailbox_route_extra_total"
     | "mailbox_route_missing_total"
   >,

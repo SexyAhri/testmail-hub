@@ -91,7 +91,7 @@ export function DomainAssetDrawer({
         </Form.Item>
       </Col>
       <Col xs={24} md={12}>
-        <Form.Item label="Provider" name="provider" rules={[{ required: true, message: "请选择 Provider" }]}>
+        <Form.Item label="服务商" name="provider" rules={[{ required: true, message: "请选择服务商" }]}>
           <Select options={providerOptions} />
         </Form.Item>
       </Col>
@@ -117,41 +117,41 @@ export function DomainAssetDrawer({
       </Col>
       <Col xs={24} md={12}>
         <Form.Item
-          label={domainProviderSupports(activeProvider, "zone_id") ? "Cloudflare Zone ID" : "Zone ID（当前 Provider 不适用）"}
+          label={domainProviderSupports(activeProvider, "zone_id") ? "Cloudflare 区域 ID" : "区域 ID（当前服务商不适用）"}
           name="zone_id"
         >
           <Input
-            placeholder={domainProviderSupports(activeProvider, "zone_id") ? "可留空，留空时回退到环境变量" : "当前 Provider 不需要 Zone ID"}
+            placeholder={domainProviderSupports(activeProvider, "zone_id") ? "可留空，留空时回退到环境变量" : "当前服务商不需要区域 ID"}
             disabled={!domainProviderSupports(activeProvider, "zone_id")}
           />
         </Form.Item>
       </Col>
       <Col xs={24} md={12}>
         <Form.Item
-          label={domainProviderSupports(activeProvider, "email_worker") ? "邮件 Worker" : "邮件 Worker（当前 Provider 不适用）"}
+          label={domainProviderSupports(activeProvider, "email_worker") ? "邮件 Worker" : "邮件 Worker（当前服务商不适用）"}
           name="email_worker"
         >
           <Input
-            placeholder={domainProviderSupports(activeProvider, "email_worker") ? "可留空，留空时回退到环境变量" : "当前 Provider 不需要邮件 Worker"}
+            placeholder={domainProviderSupports(activeProvider, "email_worker") ? "可留空，留空时回退到环境变量" : "当前服务商不需要邮件 Worker"}
             disabled={!domainProviderSupports(activeProvider, "email_worker")}
           />
         </Form.Item>
       </Col>
       <Col xs={24} md={12}>
         <Form.Item
-          label={domainProviderSupports(activeProvider, "mailbox_route_sync") ? "邮箱路由转发到" : "邮箱路由转发到（当前 Provider 不适用）"}
+          label={domainProviderSupports(activeProvider, "mailbox_route_sync") ? "邮箱路由转发到" : "邮箱路由转发到（当前服务商不适用）"}
           name="mailbox_route_forward_to"
           extra={
             domainProviderSupports(activeProvider, "mailbox_route_sync")
-              ? "可选。填写后自动创建或更新的邮箱路由会优先使用 forward 动作，适合跨 CF 账号集中收件。"
-              : "当前 Provider 不支持托管邮箱路由。"
+              ? "可选。填写后自动创建或更新的邮箱路由会优先使用转发动作，适合跨 CF 账号集中收件。"
+              : "当前服务商不支持托管邮箱路由。"
           }
         >
           <Input
             placeholder={
               domainProviderSupports(activeProvider, "mailbox_route_sync")
                 ? "例如：relay@primary.example.com"
-                : "当前 Provider 不支持邮箱路由同步"
+                : "当前服务商不支持邮箱路由同步"
             }
             disabled={!domainProviderSupports(activeProvider, "mailbox_route_sync")}
           />
@@ -160,9 +160,9 @@ export function DomainAssetDrawer({
       {activeProvider?.key === "cloudflare" ? (
         <Col xs={24} md={12}>
           <Form.Item
-            label="Cloudflare Token 来源"
+            label="Cloudflare 令牌来源"
             name="cloudflare_api_token_mode"
-            extra="默认复用环境变量 CLOUDFLARE_API_TOKEN；独立 Token 只对当前域名生效。"
+            extra="默认复用环境变量 CLOUDFLARE_API_TOKEN；独立令牌只对当前域名生效。"
           >
             <Select options={CLOUDFLARE_TOKEN_MODE_OPTIONS} />
           </Form.Item>
@@ -171,18 +171,18 @@ export function DomainAssetDrawer({
       {activeProvider?.key === "cloudflare" ? (
         <Col xs={24} md={12}>
           <Form.Item
-            label="域名独立 Token"
+            label="域名独立令牌"
             name="cloudflare_api_token"
             extra={
               watchedCloudflareTokenMode === "domain"
                 ? editing?.cloudflare_api_token_configured
-                  ? "当前已配置独立 Token；留空表示保留，输入新值表示替换。"
+                  ? "当前已配置独立令牌；留空表示保留，输入新值表示替换。"
                   : "仅在当前域名需要独立 Cloudflare 权限时填写。"
-                : "切换到“使用域名独立 Token”后再填写。"
+                : "切换到“使用域名独立令牌”后再填写。"
             }
             rules={
               watchedCloudflareTokenMode === "domain" && !editing?.cloudflare_api_token_configured
-                ? [{ required: true, message: "请输入域名独立 Token" }]
+                ? [{ required: true, message: "请输入域名独立令牌" }]
                 : undefined
             }
           >
@@ -190,8 +190,8 @@ export function DomainAssetDrawer({
               placeholder={
                 watchedCloudflareTokenMode === "domain"
                   ? editing?.cloudflare_api_token_configured
-                    ? "留空则保留当前独立 Token"
-                    : "输入当前域名使用的 Cloudflare API Token"
+                    ? "留空则保留当前独立令牌"
+                    : "输入当前域名使用的 Cloudflare API 令牌"
                   : "当前使用全局 CLOUDFLARE_API_TOKEN"
               }
               disabled={watchedCloudflareTokenMode !== "domain"}
@@ -206,7 +206,7 @@ export function DomainAssetDrawer({
             options={routingProfileOptions}
             placeholder={
               !domainProviderSupports(activeProvider, "routing_profile")
-                ? "当前 Provider 不支持路由策略"
+                ? "当前服务商不支持路由策略"
                 : routingProfileOptions.length > 0
                   ? "可选，绑定独立路由策略"
                   : "当前工作空间暂无可用策略"
@@ -229,7 +229,7 @@ export function DomainAssetDrawer({
             type={activeProvider.key === "manual" ? "warning" : "info"}
             showIcon
             style={{ marginBottom: 16 }}
-            message={`当前 Provider：${activeProvider.label}`}
+            message={`当前服务商：${activeProvider.label}`}
             description={`${activeProvider.description} 当前能力：${
               activeProvider.capabilities.length > 0
                 ? activeProvider.capabilities.map(item => PROVIDER_CAPABILITY_LABELS[item]).join(" / ")
@@ -244,7 +244,7 @@ export function DomainAssetDrawer({
           name="catch_all_forward_to"
           extra={
             !domainProviderSupports(activeProvider, "catch_all_policy")
-              ? "当前 Provider 不支持托管 Catch-all 策略，系统只保留域名资产记录。"
+              ? "当前服务商不支持托管 Catch-all 策略，系统只保留域名资产记录。"
               : watchedCatchAllMode === "enabled"
                 ? "开启后，所有未单独建档的地址都会转发到这里。"
                 : "当这里保持“跟随当前 Cloudflare 配置”时，如果已绑定路由策略，则会优先继承路由策略。"
@@ -268,7 +268,7 @@ export function DomainAssetDrawer({
           name="operation_note"
           extra="这条说明不会写入域名资产资料，只会进入审计日志。"
         >
-          <Input.TextArea rows={2} placeholder="例如：补录域名归属、切换独立 Token、调整 Catch-all 与路由治理策略" />
+          <Input.TextArea rows={2} placeholder="例如：补录域名归属、切换独立令牌、调整 Catch-all 与路由治理策略" />
         </Form.Item>
       </Col>
       <Col xs={24} md={12}>
@@ -300,7 +300,7 @@ export function DomainAssetDrawer({
           showIcon
           style={{ marginBottom: 16 }}
           message="域名治理规则"
-          description="“允许新建邮箱”关闭后，该域名不会再出现在邮箱创建可选列表中；“允许 Catch-all 同步”关闭后，页面和批量操作都不会再把 Catch-all 策略同步到 Cloudflare；“允许路由同步”关闭后，系统不会再自动写入、更新或删除该域名下的邮箱路由；如果填写了“邮箱路由转发到”，系统会优先按这个地址写入 forward 路由。"
+          description="“允许新建邮箱”关闭后，该域名不会再出现在邮箱创建可选列表中；“允许 Catch-all 同步”关闭后，页面和批量操作都不会再把 Catch-all 策略同步到 Cloudflare；“允许路由同步”关闭后，系统不会再自动写入、更新或删除该域名下的邮箱路由；如果填写了“邮箱路由转发到”，系统会优先按这个地址写入转发路由。"
         />
       </Col>
       <Col xs={24} md={12}>

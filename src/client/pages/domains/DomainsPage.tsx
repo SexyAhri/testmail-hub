@@ -522,6 +522,12 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
 
   async function handleSyncMailboxRoutes(id: number) {
     const record = items.find(item => item.id === id);
+    const status = record ? statusMap.get(record.domain) : null;
+    if (record && !canSyncMailboxRoutes(record, status)) {
+      message.info("当前域名作为纯 Catch-all 使用，没有显式托管邮箱，无需同步邮箱路由。");
+      return;
+    }
+
     const operationNote = await promptOperationNote(modal, {
       title: "同步邮箱路由到 Cloudflare",
       description: `将为 ${record?.domain || `域名 #${id}`} 执行邮箱路由同步。可选填写本次操作备注，便于后续审计追溯。`,
@@ -662,10 +668,10 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
   }
 
   async function handleBatchSyncMailboxRoutes() {
-    const syncableItems = selectedItems.filter(item => canSyncMailboxRoutes(item));
+    const syncableItems = selectedItems.filter(item => canSyncMailboxRoutes(item, statusMap.get(item.domain)));
     const skippedCount = selectedItems.length - syncableItems.length;
     if (syncableItems.length === 0) {
-      message.info("选中的域名里没有可同步的邮箱路由，可能是域名已停用、Provider 不支持，或路由同步治理已关闭");
+      message.info("选中的域名里没有可同步的邮箱路由，可能是域名已停用、Provider 不支持、路由同步治理已关闭，或当前域名属于纯 Catch-all。");
       return;
     }
 
@@ -803,6 +809,8 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
     configuredCount,
     currentTabResultCount,
     currentTabTotalCount,
+    domainHierarchyMap,
+    domainHierarchyOverviewItems,
     domainCatchAllOptions,
     domainRowSelection,
     driftCount,
@@ -909,6 +917,7 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
     () => buildDomainStatusColumns({
       assetMap,
       canManageDomainAssetRecord,
+      domainHierarchyMap,
       handleSyncCatchAll: id => {
         void handleSyncCatchAll(id);
       },
@@ -918,12 +927,13 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
       providerMap,
       syncing,
     }),
-    [assetMap, providerMap, syncing],
+    [assetMap, domainHierarchyMap, providerMap, syncing],
   );
 
   const configColumns = useMemo(
     () => buildDomainConfigColumns({
       canManageDomainAssetRecord,
+      domainHierarchyMap,
       getProtectedDomainDeleteReason,
       handleDelete: id => {
         void handleDelete(id);
@@ -939,7 +949,7 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
       statusMap,
       syncing,
     }),
-    [providerMap, statusMap, syncing],
+    [domainHierarchyMap, providerMap, statusMap, syncing],
   );
 
   const routingProfileColumns = useMemo(
@@ -963,8 +973,8 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
           ...(accessTag ? [accessTag] : []),
           ...(errorCount > 0 ? [{ color: "error", label: `异常 ${errorCount}` }] : []),
           ...(governanceBlockedCount > 0 ? [{ color: "processing", label: `治理受阻 ${governanceBlockedCount}` }] : []),
-          ...(driftCount > 0 ? [{ color: "warning", label: `待同步 ${driftCount}` }] : []),
-          ...(routeDriftCount > 0 ? [{ color: "orange", label: `路由漂移 ${routeDriftCount}` }] : []),
+          ...(driftCount > 0 ? [{ color: "warning", label: `Catch-all 漂移 ${driftCount}` }] : []),
+          ...(routeDriftCount > 0 ? [{ color: "orange", label: `邮箱路由漂移 ${routeDriftCount}` }] : []),
         ]}
         extra={(
           <Space wrap>
@@ -1031,6 +1041,7 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
                 cloudflareHealthOverviewItems={cloudflareHealthOverviewItems}
                 cloudflareRoutingOverviewItems={cloudflareRoutingOverviewItems}
                 configuredCount={configuredCount}
+                domainHierarchyOverviewItems={domainHierarchyOverviewItems}
                 driftCount={driftCount}
                 emailVolumeChartData={emailVolumeChartData}
                 enabledCount={enabledCount}

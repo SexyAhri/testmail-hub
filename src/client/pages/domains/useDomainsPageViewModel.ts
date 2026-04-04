@@ -38,6 +38,11 @@ import {
   type DomainStatusFocusCard,
   type DomainTabKey,
 } from "./domains-utils";
+import {
+  buildDomainHierarchyMap,
+  buildDomainHierarchySummary,
+  sortDomainRecordsByHierarchy,
+} from "./domain-hierarchy";
 
 interface UseDomainsPageViewModelArgs {
   accessibleProjectIds: number[];
@@ -104,6 +109,13 @@ export function useDomainsPageViewModel({
   const statusMap = useMemo(
     () => new Map(statusItems.map(item => [item.domain, item] as const)),
     [statusItems],
+  );
+  const domainHierarchyMap = useMemo(
+    () => buildDomainHierarchyMap([
+      ...items.map(item => item.domain),
+      ...statusItems.map(item => item.domain),
+    ]),
+    [items, statusItems],
   );
 
   const editingActiveMailboxTotal = editing ? (statusMap.get(editing.domain)?.active_mailbox_total || 0) : 0;
@@ -217,19 +229,22 @@ export function useDomainsPageViewModel({
   );
 
   const filteredConfigItems = useMemo(
-    () =>
-      items.filter(item => {
+    () => {
+      const filteredItems = items.filter(item => {
         if (providerFilter && item.provider !== providerFilter) return false;
         if (!matchesDomainScopeFilter(item, scopeFilter)) return false;
         if (projectFilter && item.project_id !== projectFilter) return false;
         if (environmentFilter && item.environment_id !== environmentFilter) return false;
         return matchesDomainAssetKeyword(item, keyword);
-      }),
-    [environmentFilter, items, keyword, projectFilter, providerFilter, scopeFilter],
+      });
+
+      return sortDomainRecordsByHierarchy(filteredItems, domainHierarchyMap);
+    },
+    [domainHierarchyMap, environmentFilter, items, keyword, projectFilter, providerFilter, scopeFilter],
   );
   const filteredStatusItems = useMemo(
-    () =>
-      statusItems.filter(item => {
+    () => {
+      const filteredItems = statusItems.filter(item => {
         const asset = assetMap.get(item.domain);
         const provider = asset?.provider || item.provider;
         if (providerFilter && provider !== providerFilter) return false;
@@ -238,8 +253,21 @@ export function useDomainsPageViewModel({
         if (environmentFilter && asset?.environment_id !== environmentFilter) return false;
         if (!matchesDomainStatusKeyword(item, asset, keyword)) return false;
         return matchesDomainHealthFilter(item, asset, healthFilter);
-      }),
-    [assetMap, environmentFilter, healthFilter, keyword, projectFilter, providerFilter, scopeFilter, statusItems],
+      });
+
+      return sortDomainRecordsByHierarchy(filteredItems, domainHierarchyMap);
+    },
+    [
+      assetMap,
+      domainHierarchyMap,
+      environmentFilter,
+      healthFilter,
+      keyword,
+      projectFilter,
+      providerFilter,
+      scopeFilter,
+      statusItems,
+    ],
   );
   const filteredRoutingProfiles = useMemo(
     () =>
@@ -349,15 +377,15 @@ export function useDomainsPageViewModel({
         filter: "repairable",
         severity: "warning",
         description: visibleRepairableSummary.items.length > 0
-          ? "这些域名已经具备自动修复条件，可以直接把本地治理策略同步到 Provider。"
+          ? "这些域名已经具备自动修复条件，可以直接把本地治理策略同步到服务商。"
           : "当前筛选结果里没有可直接自动修复的域名。",
         domains: buildDomainSampleList(visibleRepairableSummary.items),
         summaryTags: [
           visibleRepairableSummary.catchAllCount > 0
-            ? { color: "warning", label: `Catch-all ${visibleRepairableSummary.catchAllCount}` }
+            ? { color: "warning", label: `Catch-all 漂移 ${visibleRepairableSummary.catchAllCount}` }
             : null,
           visibleRepairableSummary.mailboxRouteCount > 0
-            ? { color: "processing", label: `邮箱路由 ${visibleRepairableSummary.mailboxRouteCount}` }
+            ? { color: "processing", label: `邮箱路由漂移 ${visibleRepairableSummary.mailboxRouteCount}` }
             : null,
         ].filter(Boolean) as DomainStatusFocusCard["summaryTags"],
       },
@@ -368,15 +396,15 @@ export function useDomainsPageViewModel({
         filter: "governance_blocked",
         severity: "processing",
         description: visibleGovernanceBlockedSummary.items.length > 0
-          ? "这些域名存在配置差异，但当前治理规则、域名状态或 Provider 能力不允许直接自动修复。"
+          ? "这些域名存在 Catch-all 或邮箱路由漂移，但当前治理规则、域名状态或服务商能力不允许直接自动修复。"
           : "当前筛选结果里没有治理受阻的域名。",
         domains: buildDomainSampleList(visibleGovernanceBlockedSummary.items),
         summaryTags: [
           visibleGovernanceBlockedSummary.catchAllCount > 0
-            ? { color: "purple", label: `Catch-all ${visibleGovernanceBlockedSummary.catchAllCount}` }
+            ? { color: "purple", label: `Catch-all 漂移 ${visibleGovernanceBlockedSummary.catchAllCount}` }
             : null,
           visibleGovernanceBlockedSummary.mailboxRouteCount > 0
-            ? { color: "geekblue", label: `邮箱路由 ${visibleGovernanceBlockedSummary.mailboxRouteCount}` }
+            ? { color: "geekblue", label: `邮箱路由漂移 ${visibleGovernanceBlockedSummary.mailboxRouteCount}` }
             : null,
         ].filter(Boolean) as DomainStatusFocusCard["summaryTags"],
       },
@@ -387,11 +415,11 @@ export function useDomainsPageViewModel({
         filter: "error",
         severity: "error",
         description: visibleErrorCount > 0
-          ? "这些域名无法正常读取 Cloudflare 状态，优先检查 Zone ID、Token 权限和 Email Worker 配置。"
+          ? "这些域名无法正常读取 Cloudflare 状态，优先检查 Zone ID、令牌权限和邮件 Worker 配置。"
           : "当前筛选结果里没有 Cloudflare 接入异常。",
         domains: buildDomainSampleList(filteredStatusItems.filter(item => Boolean(item.cloudflare_error))),
         summaryTags: visibleErrorCount > 0
-          ? [{ color: "error", label: "优先排查 Token / Zone / Worker" }]
+          ? [{ color: "error", label: "优先排查令牌 / Zone / Worker" }]
           : [],
       },
       {
@@ -405,7 +433,7 @@ export function useDomainsPageViewModel({
           : "当前筛选结果里没有待补齐接入的域名。",
         domains: buildDomainSampleList(filteredStatusItems.filter(item => !item.cloudflare_configured)),
         summaryTags: visibleUnconfiguredCount > 0
-          ? [{ color: "default", label: "需要 Zone ID / Token / Worker" }]
+          ? [{ color: "default", label: "需要 Zone ID / 令牌 / Worker" }]
           : [],
       },
     ],
@@ -568,6 +596,25 @@ export function useDomainsPageViewModel({
       projectBoundCount,
     ],
   );
+  const domainHierarchySummary = useMemo(
+    () => buildDomainHierarchySummary(buildDomainHierarchyMap(items.map(item => item.domain))),
+    [items],
+  );
+  const domainHierarchyOverviewItems = useMemo(
+    () => [
+      { label: "根域名分组", value: formatMetricValue(domainHierarchySummary.rootDomainCount) },
+      { label: "子域名数量", value: formatMetricValue(domainHierarchySummary.subdomainCount) },
+      { label: "二级及更深", value: formatMetricValue(domainHierarchySummary.nestedSubdomainCount) },
+      { label: "最大层级", value: formatMetricValue(domainHierarchySummary.maxDepth) },
+      {
+        label: "最大分组",
+        value: domainHierarchySummary.largestGroupRootDomain
+          ? `${domainHierarchySummary.largestGroupRootDomain} (${formatMetricValue(domainHierarchySummary.largestGroupSize)})`
+          : "-",
+      },
+    ],
+    [domainHierarchySummary],
+  );
   const cloudflareHealthOverviewItems = useMemo(
     () => [
       { label: "Cloudflare 已接入", value: formatMetricValue(configuredCount) },
@@ -589,7 +636,7 @@ export function useDomainsPageViewModel({
       { label: "Cloudflare 路由", value: formatMetricValue(totalRoutes) },
       { label: "启用邮箱路由", value: formatMetricValue(totalEnabledMailboxRoutes) },
       { label: "托管目标路由", value: formatMetricValue(totalExpectedMailboxRoutes) },
-      { label: "路由漂移域名", value: formatMetricValue(routeDriftCount) },
+      { label: "邮箱路由漂移域名", value: formatMetricValue(routeDriftCount) },
       { label: "观测邮箱", value: formatMetricValue(totalObservedMailboxes) },
       { label: "收件总量", value: formatMetricValue(totalEmails) },
     ],
@@ -616,6 +663,8 @@ export function useDomainsPageViewModel({
     configuredCount,
     currentTabResultCount,
     currentTabTotalCount,
+    domainHierarchyMap,
+    domainHierarchyOverviewItems,
     domainCatchAllOptions,
     domainRowSelection,
     driftCount,

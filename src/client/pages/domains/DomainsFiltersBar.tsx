@@ -76,7 +76,7 @@ export function DomainsFiltersBar({
         <div style={{ minWidth: 150, flex: "1 1 150px" }}>
           <Select
             allowClear
-            placeholder="Provider"
+            placeholder="服务商"
             value={providerFilter}
             options={providerOptions}
             onChange={value => onProviderFilterChange(value)}

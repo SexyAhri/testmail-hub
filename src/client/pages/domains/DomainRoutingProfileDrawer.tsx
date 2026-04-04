@@ -70,7 +70,7 @@ export function DomainRoutingProfileDrawer({
         </Form.Item>
       </Col>
       <Col xs={24} md={12}>
-        <Form.Item label="Provider" name="provider" rules={[{ required: true, message: "请选择 Provider" }]}>
+        <Form.Item label="服务商" name="provider" rules={[{ required: true, message: "请选择服务商" }]}>
           <Select options={providerOptions} />
         </Form.Item>
       </Col>
@@ -114,7 +114,7 @@ export function DomainRoutingProfileDrawer({
             type="info"
             showIcon
             style={{ marginBottom: 16 }}
-            message={`当前 Provider：${activeProvider.label}`}
+            message={`当前服务商：${activeProvider.label}`}
             description={`${activeProvider.description} 当前能力：${
               activeProvider.capabilities.length > 0
                 ? activeProvider.capabilities.map(item => PROVIDER_CAPABILITY_LABELS[item]).join(" / ")

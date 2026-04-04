@@ -53,6 +53,10 @@ import type {
   OutboundTemplateRecord,
 } from "../../types";
 import { fileToBase64, runBatchAction } from "../../utils";
+import {
+  MAX_OUTBOUND_ATTACHMENTS,
+  MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES,
+} from "../../../utils/constants";
 import { ComposeEmailDrawer } from "./ComposeEmailDrawer";
 import { OutboundContactDrawer } from "./OutboundContactDrawer";
 import { OutboundContactsTable } from "./OutboundContactsTable";
@@ -85,6 +89,8 @@ import {
   getSendActionText,
   isFormError,
   normalizeAttachment,
+  downloadOutboundAttachment,
+  planOutboundAttachmentSelection,
   parseTemplateVariables,
   renderTemplateString,
   type ComposeFormValues,
@@ -288,6 +294,7 @@ export default function OutboundEmailsPage({ currentUser, onUnauthorized }: Outb
       html_template: template?.html_template || "",
       is_enabled: template?.is_enabled ?? true,
       name: template?.name || "",
+      operation_note: "",
       subject_template: template?.subject_template || "",
       text_template: template?.text_template || "",
       variables: template?.variables.join(", ") || "",
@@ -302,6 +309,7 @@ export default function OutboundEmailsPage({ currentUser, onUnauthorized }: Outb
       is_favorite: contact?.is_favorite ?? true,
       name: contact?.name || "",
       note: contact?.note || "",
+      operation_note: "",
       tags: contact?.tags.join(", ") || "",
     });
     setContactOpen(true);
@@ -328,10 +336,25 @@ export default function OutboundEmailsPage({ currentUser, onUnauthorized }: Outb
     const files = Array.from(event.target.files || []);
     if (files.length === 0) return;
 
+    const attachmentPlan = planOutboundAttachmentSelection(composeAttachments, files);
+    const acceptedFiles = attachmentPlan.acceptedIndexes.map(index => files[index]);
+    const rejectedByCount = attachmentPlan.rejected.filter(item => item.reason === "count").length;
+    const rejectedBySize = attachmentPlan.rejected.filter(item => item.reason === "size").length;
+
+    if (acceptedFiles.length === 0) {
+      const rejectMessages = [
+        rejectedByCount > 0 ? `attachment count cannot exceed ${MAX_OUTBOUND_ATTACHMENTS}` : "",
+        rejectedBySize > 0 ? `attachment total size cannot exceed ${(MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES / (1024 * 1024)).toFixed(0)} MB` : "",
+      ].filter(Boolean);
+      message.warning(rejectMessages.join("; "));
+      event.target.value = "";
+      return;
+    }
+
     setAttachmentLoading(true);
     try {
       const attachments = await Promise.all(
-        files.map(async file => ({
+        acceptedFiles.map(async file => ({
           content_base64: await fileToBase64(file),
           content_type: file.type || "application/octet-stream",
           filename: file.name,
@@ -339,6 +362,14 @@ export default function OutboundEmailsPage({ currentUser, onUnauthorized }: Outb
         })),
       );
       setComposeAttachments(current => [...current, ...attachments]);
+      if (attachmentPlan.rejected.length > 0) {
+        const rejectMessages = [
+          rejectedByCount > 0 ? `${rejectedByCount} skipped because the attachment count limit was reached` : "",
+          rejectedBySize > 0 ? `${rejectedBySize} skipped because the total attachment size would exceed ${(MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES / (1024 * 1024)).toFixed(0)} MB` : "",
+        ].filter(Boolean);
+        message.warning(`added ${attachments.length} attachment(s); ${rejectMessages.join("; ")}`);
+        return;
+      }
       message.success(`已添加 ${attachments.length} 个附件`);
     } catch (error) {
       handleRequestError(error, "附件读取失败");
@@ -904,6 +935,11 @@ export default function OutboundEmailsPage({ currentUser, onUnauthorized }: Outb
           setComposeOpen(false);
           setEditingEmail(null);
           setComposeAttachments([]);
+        }}
+        onDownloadAttachment={index => {
+          const attachment = composeAttachments[index];
+          if (!attachment) return;
+          downloadOutboundAttachment(attachment);
         }}
         onRemoveAttachment={index => {
           setComposeAttachments(current => current.filter((_value, itemIndex) => itemIndex !== index));

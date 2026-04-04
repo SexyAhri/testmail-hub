@@ -1,5 +1,6 @@
 import {
   addAuditLog,
+  getOutboundEmailById,
   getOutboundEmailSettings,
   getOutboundTemplates,
 } from "../../core/db";
@@ -10,9 +11,81 @@ import {
   parseTemplateVariables,
   validateOutboundEmailInput,
 } from "../../core/outbound";
-import { persistOutboundEmail } from "../../core/outbound-service";
+import {
+  PersistOutboundSendError,
+  persistOutboundEmail,
+} from "../../core/outbound-service";
 import type { AuthSession, D1Database, WorkerEnv } from "../../server/types";
 import { json, jsonError } from "../../utils/utils";
+import {
+  buildResourceUpdateAuditDetail,
+  readAuditOperationNote,
+  toOutboundEmailAuditSnapshot,
+  withAuditOperationNote,
+} from "../audit";
+
+const OUTBOUND_EMAIL_AUDIT_FIELDS = [
+  "attachment_count",
+  "bcc_addresses",
+  "cc_addresses",
+  "from_address",
+  "from_name",
+  "html_body_length",
+  "last_attempt_at",
+  "provider",
+  "reply_to",
+  "scheduled_at",
+  "sent_at",
+  "status",
+  "subject",
+  "text_body_length",
+  "to_addresses",
+];
+
+function buildOutboundFallbackAuditDetail(
+  provider: string,
+  payload: NormalizedOutboundEmailPayload,
+) {
+  return {
+    attachment_count: payload.attachments.length,
+    bcc_addresses: payload.bcc,
+    cc_addresses: payload.cc,
+    from_address: payload.from_address,
+    from_name: payload.from_name,
+    html_body_length: payload.html_body.length,
+    provider,
+    reply_to: payload.reply_to,
+    scheduled_at: payload.scheduled_at,
+    subject: payload.subject,
+    text_body_length: payload.text_body.length,
+    to_addresses: payload.to,
+  };
+}
+
+function buildOutboundAuditDetail(
+  previous: ReturnType<typeof toOutboundEmailAuditSnapshot> | null,
+  next: ReturnType<typeof toOutboundEmailAuditSnapshot> | null,
+  operation_note: string,
+  extra: Record<string, unknown> = {},
+) {
+  if (previous && next) {
+    return buildResourceUpdateAuditDetail(
+      previous,
+      next,
+      OUTBOUND_EMAIL_AUDIT_FIELDS,
+      operation_note,
+      extra,
+    );
+  }
+
+  return withAuditOperationNote(
+    {
+      ...extra,
+      ...(next || {}),
+    },
+    operation_note,
+  );
+}
 
 export async function persistOutboundFromHandler(
   db: D1Database,
@@ -21,7 +94,15 @@ export async function persistOutboundFromHandler(
   provider: string,
   payload: NormalizedOutboundEmailPayload,
   existingId?: number,
+  operation_note = "",
 ): Promise<Response> {
+  const previousRecord = existingId
+    ? await getOutboundEmailById(db, existingId)
+    : null;
+  const previousSnapshot = previousRecord
+    ? toOutboundEmailAuditSnapshot(previousRecord)
+    : null;
+
   try {
     const outcome = await persistOutboundEmail(db, env, {
       existing_id: existingId,
@@ -36,21 +117,29 @@ export async function persistOutboundFromHandler(
         : outcome.action === "scheduled"
           ? "outbound.email.schedule"
           : "outbound.email.send";
+    const nextRecord = outcome.record
+      || (existingId ? await getOutboundEmailById(db, existingId) : null);
+    const nextSnapshot = nextRecord
+      ? toOutboundEmailAuditSnapshot(nextRecord)
+      : null;
+    const nextStatus =
+      outcome.action === "draft"
+        ? "draft"
+        : outcome.action === "scheduled"
+          ? "scheduled"
+          : "sent";
 
     await addAuditLog(db, {
       action,
       actor,
-      detail: {
-        attachment_count: payload.attachments.length,
-        bcc_count: payload.bcc.length,
-        cc_count: payload.cc.length,
-        from_address: payload.from_address,
-        scheduled_at: payload.scheduled_at,
-        subject: payload.subject,
-        to: payload.to,
-      },
-      entity_id: outcome.record
-        ? String(outcome.record.id)
+      detail: buildOutboundAuditDetail(previousSnapshot, nextSnapshot, operation_note, {
+        delivery_action: outcome.action,
+        id: nextRecord?.id || existingId,
+        status: nextStatus,
+        ...buildOutboundFallbackAuditDetail(provider, payload),
+      }),
+      entity_id: nextRecord
+        ? String(nextRecord.id)
         : existingId
           ? String(existingId)
           : undefined,
@@ -71,17 +160,28 @@ export async function persistOutboundFromHandler(
       error instanceof Error
         ? error.message
         : "failed to process outbound email";
+    const failedRecordId =
+      error instanceof PersistOutboundSendError
+        ? error.recordId
+        : existingId;
+    const failedRecord = failedRecordId
+      ? await getOutboundEmailById(db, failedRecordId)
+      : null;
+    const failedSnapshot = failedRecord
+      ? toOutboundEmailAuditSnapshot(failedRecord)
+      : null;
 
     await addAuditLog(db, {
       action: "outbound.email.send_failed",
       actor,
-      detail: {
+      detail: buildOutboundAuditDetail(previousSnapshot, failedSnapshot, operation_note, {
         error: message,
-        from_address: payload.from_address,
-        subject: payload.subject,
-        to: payload.to,
-      },
-      entity_id: existingId ? String(existingId) : undefined,
+        failed_action: "send",
+        id: failedRecord?.id || failedRecordId,
+        status: "failed",
+        ...buildOutboundFallbackAuditDetail(provider, payload),
+      }),
+      entity_id: failedRecordId ? String(failedRecordId) : undefined,
       entity_type: "outbound_email",
     });
 
@@ -101,6 +201,9 @@ export async function prepareOutboundPersistencePayload(
   db: D1Database,
   env: WorkerEnv,
 ) {
+  const operationNoteValidation = readAuditOperationNote(body);
+  if (!operationNoteValidation.ok) return operationNoteValidation;
+
   const settings = await getOutboundEmailSettings(db, env);
   const templateId = Number(body.template_id || 0);
 
@@ -131,6 +234,7 @@ export async function prepareOutboundPersistencePayload(
   return {
     ok: true as const,
     data: validation.data,
+    operation_note: operationNoteValidation.operation_note,
     settings,
   };
 }

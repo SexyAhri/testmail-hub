@@ -2574,6 +2574,128 @@ test("handleAdminDomainAssetsStatusGet reports mailbox route drift for missing a
   }
 });
 
+test("handleAdminDomainAssetsStatusGet ignores mailbox route drift for pure catch-all domains", async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input) => {
+    if (String(input).includes("/email/routing/rules/catch_all")) {
+      return new Response(JSON.stringify({
+        result: {
+          actions: [{ type: "forward", value: ["ops@example.com"] }],
+          enabled: true,
+        },
+        success: true,
+      }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({
+      result: [
+        {
+          actions: [{ type: "forward", value: ["relay@primary.example.com"] }],
+          enabled: true,
+          matchers: [{ field: "to", type: "literal", value: "manual@alpha.example.com" }],
+        },
+      ],
+      result_info: { total_pages: 1 },
+      success: true,
+    }), { status: 200 });
+  };
+
+  try {
+    const db: D1Database = {
+      prepare(query: string): D1PreparedStatement {
+        return {
+          bind() {
+            return this;
+          },
+          all: async () => {
+            if (query.includes("FROM domains d")) {
+              return {
+                results: [
+                  {
+                    allow_catch_all_sync: 1,
+                    allow_mailbox_route_sync: 1,
+                    allow_new_mailboxes: 1,
+                    catch_all_forward_to: "ops@example.com",
+                    catch_all_mode: "enabled",
+                    cloudflare_api_token: "",
+                    cloudflare_api_token_configured: 0,
+                    created_at: 1,
+                    domain: "alpha.example.com",
+                    email_worker: "worker-alpha",
+                    environment_id: null,
+                    environment_name: "",
+                    environment_slug: "",
+                    id: 1,
+                    is_enabled: 1,
+                    is_primary: 0,
+                    mailbox_route_forward_to: "relay@primary.example.com",
+                    note: "",
+                    project_id: null,
+                    project_name: "",
+                    project_slug: "",
+                    provider: "cloudflare",
+                    routing_profile_catch_all_forward_to: "",
+                    routing_profile_catch_all_mode: "inherit",
+                    routing_profile_enabled: 0,
+                    routing_profile_id: null,
+                    routing_profile_name: "",
+                    routing_profile_slug: "",
+                    updated_at: 1,
+                    zone_id: "zone-alpha",
+                  },
+                ],
+              };
+            }
+
+            if (query.includes("SELECT address FROM mailboxes")) {
+              return { results: [] };
+            }
+
+            if (query.includes("SELECT to_address FROM emails")) {
+              return { results: [] };
+            }
+
+            throw new Error(`Unexpected query: ${query}`);
+          },
+          first: async () => null,
+          run: async () => ({}),
+        };
+      },
+    };
+
+    const actor: AuthSession = {
+      access_scope: "all",
+      auth_kind: "bootstrap_token",
+      display_name: "Owner",
+      expires_at: Date.now() + 60_000,
+      nonce: "n",
+      role: "owner",
+      user_agent_hash: "ua",
+      user_id: "owner",
+      username: "owner",
+    };
+    const env = {
+      CLOUDFLARE_API_TOKEN: "global-token",
+      DB: db,
+      MAILBOX_DOMAIN: "",
+    } as WorkerEnv;
+
+    const response = await handleAdminDomainAssetsStatusGet(db, env, actor);
+    const payload = await response.json() as { code: number; data: Array<Record<string, any>> };
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.length, 1);
+    assert.equal(payload.data[0]?.catch_all_mode, "enabled");
+    assert.equal(payload.data[0]?.mailbox_route_expected_total, 0);
+    assert.equal(payload.data[0]?.mailbox_route_enabled_total, 1);
+    assert.equal(payload.data[0]?.mailbox_route_extra_total, 0);
+    assert.equal(payload.data[0]?.mailbox_route_drift, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("handleAdminDomainAssetsSyncCatchAll rejects domains with catch-all sync governance disabled", async () => {
   const db: D1Database = {
     prepare(query: string): D1PreparedStatement {
@@ -2651,6 +2773,100 @@ test("handleAdminDomainAssetsSyncCatchAll rejects domains with catch-all sync go
 
   assert.equal(response.status, 400);
   assert.equal(payload.message, "catch-all sync is disabled for this domain");
+});
+
+test("handleAdminDomainAssetsSyncMailboxRoutes rejects pure catch-all domains without explicit mailboxes", async () => {
+  const db: D1Database = {
+    prepare(query: string): D1PreparedStatement {
+      return {
+        bind() {
+          return this;
+        },
+        all: async () => {
+          if (query.includes("SELECT address FROM mailboxes")) {
+            return { results: [] };
+          }
+          if (query.includes("SELECT to_address FROM emails")) {
+            return { results: [] };
+          }
+          return { results: [] };
+        },
+        first: async () => {
+          if (query.includes("FROM domains d") && query.includes("WHERE d.id = ? LIMIT 1")) {
+            return {
+              allow_catch_all_sync: 1,
+              allow_mailbox_route_sync: 1,
+              allow_new_mailboxes: 1,
+              catch_all_forward_to: "ops@example.com",
+              catch_all_mode: "enabled",
+              cloudflare_api_token: "",
+              cloudflare_api_token_configured: 0,
+              created_at: 1,
+              domain: "alpha.example.com",
+              email_worker: "worker-alpha",
+              environment_id: null,
+              environment_name: "",
+              environment_slug: "",
+              id: 8,
+              is_enabled: 1,
+              is_primary: 0,
+              mailbox_route_forward_to: "",
+              note: "",
+              project_id: null,
+              project_name: "",
+              project_slug: "",
+              provider: "cloudflare",
+              routing_profile_catch_all_forward_to: "",
+              routing_profile_catch_all_mode: "inherit",
+              routing_profile_enabled: 0,
+              routing_profile_id: null,
+              routing_profile_name: "",
+              routing_profile_slug: "",
+              updated_at: 1,
+              zone_id: "zone-alpha",
+            };
+          }
+
+          return null;
+        },
+        run: async () => ({}),
+      };
+    },
+  };
+
+  const actor: AuthSession = {
+    access_scope: "all",
+    auth_kind: "bootstrap_token",
+    display_name: "Owner",
+    expires_at: Date.now() + 60_000,
+    nonce: "n",
+    role: "owner",
+    user_agent_hash: "ua",
+    user_id: "owner",
+    username: "owner",
+  };
+  const env = {
+    CLOUDFLARE_API_TOKEN: "global-token",
+    CLOUDFLARE_ZONE_ID: "zone-alpha",
+    DB: db,
+    MAILBOX_DOMAIN: "alpha.example.com",
+  } as WorkerEnv;
+  const request = new Request("https://example.com/admin/domain-assets/8/sync-mailbox-routes", {
+    body: JSON.stringify({ operation_note: "纯 Catch-all 域名不做显式路由同步" }),
+    method: "POST",
+  });
+
+  const response = await handleAdminDomainAssetsSyncMailboxRoutes(
+    "/admin/domain-assets/8/sync-mailbox-routes",
+    request,
+    db,
+    env,
+    actor,
+  );
+  const payload = await response.json() as { message?: string };
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.message, "pure catch-all domains do not manage explicit mailbox routes");
 });
 
 test("handleAdminDomainAssetsSyncCatchAll writes audit detail with operation note", async () => {

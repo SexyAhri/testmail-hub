@@ -1,4 +1,4 @@
-import { PaperClipOutlined, SendOutlined } from "@ant-design/icons";
+import { DownloadOutlined, PaperClipOutlined, SendOutlined } from "@ant-design/icons";
 import { Button, Col, DatePicker, Form, Input, Select, Space, Typography, theme } from "antd";
 import { useRef, type ChangeEvent } from "react";
 import type { FormInstance } from "antd";
@@ -11,7 +11,14 @@ import type {
   OutboundTemplateRecord,
 } from "../../types";
 import { formatBytes } from "../../utils";
-import type { ComposeFormValues } from "./outbound-utils";
+import {
+  MAX_OUTBOUND_ATTACHMENTS,
+  MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES,
+} from "../../../utils/constants";
+import {
+  getOutboundAttachmentTotalBytes,
+  type ComposeFormValues,
+} from "./outbound-utils";
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -26,6 +33,7 @@ interface ComposeEmailDrawerProps {
   onApplyTemplate: () => void;
   onAttachmentChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onClose: () => void;
+  onDownloadAttachment: (index: number) => void;
   onRemoveAttachment: (index: number) => void;
   onSaveDraft: () => void;
   onSend: () => void;
@@ -45,6 +53,7 @@ export function ComposeEmailDrawer({
   onApplyTemplate,
   onAttachmentChange,
   onClose,
+  onDownloadAttachment,
   onRemoveAttachment,
   onSaveDraft,
   onSend,
@@ -55,6 +64,7 @@ export function ComposeEmailDrawer({
 }: ComposeEmailDrawerProps) {
   const { token } = theme.useToken();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachmentTotalBytes = getOutboundAttachmentTotalBytes(composeAttachments);
 
   return (
     <FormDrawer
@@ -164,6 +174,15 @@ export function ComposeEmailDrawer({
         </Form.Item>
       </Col>
       <Col span={24}>
+        <Form.Item
+          label="本次操作备注"
+          name="operation_note"
+          extra="这条说明不会写入邮件正文，只会进入审计日志。"
+        >
+          <TextArea rows={2} placeholder="例如：补发验证码、调整收件范围、按工单更新模板内容" />
+        </Form.Item>
+      </Col>
+      <Col span={24}>
         <Form.Item label="附件">
           <Space direction="vertical" size={12} style={{ width: "100%" }}>
             <Space wrap>
@@ -171,6 +190,14 @@ export function ComposeEmailDrawer({
                 添加附件
               </Button>
               <Text type="secondary">支持多文件上传，发送时会一并写入 Resend</Text>
+            </Space>
+            <Space wrap size={[8, 0]}>
+              <Text type="secondary">
+                附件：{composeAttachments.length} / {MAX_OUTBOUND_ATTACHMENTS}
+              </Text>
+              <Text type="secondary">
+                总大小：{formatBytes(attachmentTotalBytes)} / {formatBytes(MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES)}
+              </Text>
             </Space>
             <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={onAttachmentChange} />
             {composeAttachments.length === 0 ? (
@@ -192,9 +219,14 @@ export function ComposeEmailDrawer({
                     <Text strong>{item.filename}</Text>
                     <Text type="secondary">{formatBytes(item.size_bytes)} · {item.content_type}</Text>
                   </Space>
-                  <Button danger type="link" onClick={() => onRemoveAttachment(index)}>
-                    移除
-                  </Button>
+                  <Space size={0}>
+                    <Button icon={<DownloadOutlined />} type="link" onClick={() => onDownloadAttachment(index)}>
+                      下载
+                    </Button>
+                    <Button danger type="link" onClick={() => onRemoveAttachment(index)}>
+                      移除
+                    </Button>
+                  </Space>
                 </div>
               ))
             )}

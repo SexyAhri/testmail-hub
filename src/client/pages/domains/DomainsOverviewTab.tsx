@@ -15,6 +15,7 @@ interface DomainsOverviewTabProps {
   cloudflareHealthOverviewItems: Array<{ label: string; value: string }>;
   cloudflareRoutingOverviewItems: Array<{ label: string; value: string }>;
   configuredCount: number;
+  domainHierarchyOverviewItems: Array<{ label: string; value: string }>;
   driftCount: number;
   emailVolumeChartData: MetricChartDatum[];
   enabledCount: number;
@@ -34,6 +35,7 @@ export function DomainsOverviewTab({
   cloudflareHealthOverviewItems,
   cloudflareRoutingOverviewItems,
   configuredCount,
+  domainHierarchyOverviewItems,
   driftCount,
   emailVolumeChartData,
   enabledCount,
@@ -87,14 +89,14 @@ export function DomainsOverviewTab({
             color="#13c2c2"
           />
           <MetricCard
-            title="策略待同步"
+            title="Catch-all 漂移"
             value={driftCount}
             icon={<SyncOutlined />}
             percent={buildRatio(driftCount, statusItemsLength)}
             color="#722ed1"
           />
           <MetricCard
-            title="路由漂移"
+            title="邮箱路由漂移"
             value={routeDriftCount}
             icon={<CloudServerOutlined />}
             percent={buildRatio(routeDriftCount, statusItemsLength)}
@@ -151,6 +153,14 @@ export function DomainsOverviewTab({
           </Col>
           <Col xs={24} md={12} xxl={6}>
             <InfoCard
+              title="域名层级"
+              icon={<GlobalOutlined />}
+              color="#0958d9"
+              items={domainHierarchyOverviewItems}
+            />
+          </Col>
+          <Col xs={24} md={12} xxl={6}>
+            <InfoCard
               title="接入健康"
               icon={<CloudServerOutlined />}
               color="#fa8c16"
@@ -167,7 +177,7 @@ export function DomainsOverviewTab({
           </Col>
           <Col xs={24} md={12} xxl={6}>
             <InfoCard
-              title="Provider 分布"
+              title="服务商分布"
               icon={<CloudServerOutlined />}
               color="#722ed1"
               items={providerOverviewItems}

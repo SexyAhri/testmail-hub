@@ -8,7 +8,17 @@ import {
   validateOutboundEmailInput,
   validateOutboundSettingsInput,
 } from "../src/core/outbound";
+import {
+  buildComposePayload,
+  buildContactPayload,
+  buildTemplatePayload,
+  planOutboundAttachmentSelection,
+} from "../src/client/pages/outbound/outbound-utils";
 import type { OutboundEmailSettings } from "../src/server/types";
+import {
+  MAX_OUTBOUND_ATTACHMENTS,
+  MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES,
+} from "../src/utils/constants";
 
 test("parseEmailList splits and deduplicates recipient input", () => {
   assert.deepEqual(
@@ -121,4 +131,90 @@ test("updateOutboundEmailDelivery keeps provider_message_id non-null while sendi
   assert.equal(boundValues[3], 1234567890);
   assert.equal(boundValues[4], null);
   assert.equal(boundValues[6], 42);
+});
+
+test("planOutboundAttachmentSelection stops accepting files after the max attachment count", () => {
+  const existing = Array.from(
+    { length: MAX_OUTBOUND_ATTACHMENTS - 1 },
+    () => ({ size_bytes: 1 }),
+  );
+
+  const plan = planOutboundAttachmentSelection(existing, [
+    { size: 10 },
+    { size: 10 },
+    { size: 10 },
+  ]);
+
+  assert.deepEqual(plan.acceptedIndexes, [0]);
+  assert.equal(plan.rejected.length, 2);
+  assert.ok(plan.rejected.every(item => item.reason === "count"));
+});
+
+test("planOutboundAttachmentSelection enforces the total attachment size budget", () => {
+  const existing = [{ size_bytes: MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES - 512 }];
+
+  const plan = planOutboundAttachmentSelection(existing, [
+    { size: 256 },
+    { size: 300 },
+  ]);
+
+  assert.deepEqual(plan.acceptedIndexes, [0]);
+  assert.deepEqual(plan.rejected, [{ index: 1, reason: "size" }]);
+  assert.equal(plan.nextTotalBytes, MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES - 256);
+});
+
+test("buildComposePayload includes a trimmed operation note", () => {
+  const payload = buildComposePayload(
+    {
+      bcc: [],
+      cc: [],
+      from_address: " noreply@example.com ",
+      from_name: " TestMail Hub ",
+      html_body: "<p>Hello</p>",
+      operation_note: "  按工单补发验证码  ",
+      reply_to: " support@example.com ",
+      scheduled_at: null,
+      subject: " 验证码通知 ",
+      template_id: undefined,
+      template_variables: "  {}  ",
+      text_body: "Hello",
+      to: ["user@example.com"],
+    },
+    [],
+    "send",
+  );
+
+  assert.equal(payload.operation_note, "按工单补发验证码");
+  assert.equal(payload.subject, "验证码通知");
+  assert.equal(payload.from_address, "noreply@example.com");
+});
+
+test("buildTemplatePayload includes a trimmed operation note", () => {
+  const payload = buildTemplatePayload({
+    html_template: "<p>{{code}}</p>",
+    is_enabled: true,
+    name: " OTP ",
+    operation_note: "  切换模板版本  ",
+    subject_template: " code ",
+    text_template: "body",
+    variables: "code",
+  });
+
+  assert.equal(payload.operation_note, "切换模板版本");
+  assert.equal(payload.name, "OTP");
+});
+
+test("buildContactPayload includes a trimmed operation note", () => {
+  const payload = buildContactPayload({
+    email: " ops@example.com ",
+    is_favorite: true,
+    name: " Ops ",
+    note: " note ",
+    operation_note: "  补录值班联系人  ",
+    tags: "ops",
+  });
+
+  assert.equal(payload.operation_note, "补录值班联系人");
+  assert.equal(payload.email, "ops@example.com");
+  assert.equal(payload.name, "Ops");
 });

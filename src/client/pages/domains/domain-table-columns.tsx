@@ -7,6 +7,7 @@ import {
   canRepairMailboxRouteDrift,
   canSyncCatchAll,
   canSyncMailboxRoutes,
+  isPureCatchAllDomainStatus,
 } from "../../domain-filters";
 import { ActionButtons } from "../../components";
 import type {
@@ -19,16 +20,19 @@ import {
   renderActualCatchAllStatus,
   renderCatchAllModeTokens,
   renderDomainGovernance,
+  renderDomainHierarchy,
   renderEffectiveCatchAllPolicy,
   renderMailboxRouteStatus,
   renderProviderBadge,
   renderRoutingProfileBinding,
   renderWorkspaceScope,
 } from "./domains-utils";
+import type { DomainHierarchyEntry } from "./domain-hierarchy";
 
 interface BuildDomainStatusColumnsOptions {
   assetMap: Map<string, DomainAssetRecord>;
   canManageDomainAssetRecord: (record: Pick<DomainAssetRecord, "project_id">) => boolean;
+  domainHierarchyMap: Map<string, DomainHierarchyEntry>;
   handleSyncCatchAll: (id: number) => void;
   handleSyncMailboxRoutes: (id: number) => void;
   providerMap: Map<string, DomainProviderDefinition>;
@@ -37,6 +41,7 @@ interface BuildDomainStatusColumnsOptions {
 
 interface BuildDomainConfigColumnsOptions {
   canManageDomainAssetRecord: (record: Pick<DomainAssetRecord, "project_id">) => boolean;
+  domainHierarchyMap: Map<string, DomainHierarchyEntry>;
   handleDelete: (id: number) => void;
   handleSyncCatchAll: (id: number) => void;
   handleSyncMailboxRoutes: (id: number) => void;
@@ -60,6 +65,7 @@ interface BuildRoutingProfileColumnsOptions {
 export function buildDomainStatusColumns({
   assetMap,
   canManageDomainAssetRecord,
+  domainHierarchyMap,
   handleSyncCatchAll,
   handleSyncMailboxRoutes,
   providerMap,
@@ -74,6 +80,12 @@ export function buildDomainStatusColumns({
       render: value => <span style={{ fontFamily: "monospace" }}>{value}</span>,
     },
     {
+      title: "层级关系",
+      key: "hierarchy",
+      width: 240,
+      render: (_, record) => renderDomainHierarchy(domainHierarchyMap.get(record.domain)),
+    },
+    {
       title: "工作空间",
       key: "workspace",
       render: (_, record) => {
@@ -83,7 +95,7 @@ export function buildDomainStatusColumns({
       },
     },
     {
-      title: "Provider",
+      title: "服务商",
       key: "provider",
       render: (_, record) => {
         const asset = assetMap.get(record.domain);
@@ -140,7 +152,7 @@ export function buildDomainStatusColumns({
       },
     },
     {
-      title: "Provider 实际状态",
+      title: "服务商实际状态",
       key: "catch_all_actual",
       render: (_, record) => {
         const asset = assetMap.get(record.domain);
@@ -151,7 +163,7 @@ export function buildDomainStatusColumns({
       },
     },
     {
-      title: "同步状态",
+      title: "Catch-all 状态",
       key: "catch_all_drift",
       render: (_, record) => {
         const asset = assetMap.get(record.domain);
@@ -161,7 +173,7 @@ export function buildDomainStatusColumns({
         }
         if (record.cloudflare_error) return <Tag color="error">异常</Tag>;
         if (!record.cloudflare_configured) return <Tag>未接入</Tag>;
-        if (record.catch_all_drift) return <Tag color="warning">待同步</Tag>;
+        if (record.catch_all_drift) return <Tag color="warning">有漂移</Tag>;
         return <Tag color="success">已同步</Tag>;
       },
     },
@@ -214,7 +226,11 @@ export function buildDomainStatusColumns({
         }
 
         if (!record.cloudflare_configured) {
-          return "当前域名还没有完整的 Cloudflare Zone / Token / Worker 配置。";
+          return "当前域名还没有完整的 Cloudflare Zone / API 令牌 / Worker 配置。";
+        }
+
+        if (isPureCatchAllDomainStatus(record)) {
+          return "当前域名作为纯 Catch-all 使用，没有显式托管邮箱，因此不校验也不批量治理显式邮箱路由。";
         }
 
         if (record.mailbox_route_drift) {
@@ -234,13 +250,13 @@ export function buildDomainStatusColumns({
 
         if (record.catch_all_source === "routing_profile") {
           if (record.catch_all_drift) {
-            return `当前生效策略来自路由策略 ${record.routing_profile_name || "未命名策略"}，但与 Cloudflare 实际状态不一致。`;
+            return `当前生效策略来自路由策略 ${record.routing_profile_name || "未命名策略"}，但 Catch-all 与 Cloudflare 实际状态存在漂移。`;
           }
           return `当前生效策略来自路由策略 ${record.routing_profile_name || "未命名策略"}。`;
         }
 
         if (record.catch_all_drift) {
-          return "本地策略与 Cloudflare 实际状态不一致，请执行同步。";
+          return "本地 Catch-all 策略与 Cloudflare 实际状态存在漂移，请执行同步。";
         }
 
         return "本地 Catch-all 与邮箱路由均已和 Cloudflare 保持一致。";
@@ -288,6 +304,7 @@ export function buildDomainStatusColumns({
 
 export function buildDomainConfigColumns({
   canManageDomainAssetRecord,
+  domainHierarchyMap,
   getProtectedDomainDeleteReason,
   handleDelete,
   handleSyncCatchAll,
@@ -297,6 +314,13 @@ export function buildDomainConfigColumns({
   statusMap,
   syncing,
 }: BuildDomainConfigColumnsOptions): ColumnsType<DomainAssetRecord> {
+  const hierarchyColumn = {
+    title: "层级关系",
+    key: "hierarchy",
+    width: 240,
+    render: (_: unknown, record: DomainAssetRecord) => renderDomainHierarchy(domainHierarchyMap.get(record.domain)),
+  } satisfies ColumnsType<DomainAssetRecord>[number];
+
   return [
     {
       title: "域名",
@@ -305,8 +329,9 @@ export function buildDomainConfigColumns({
       width: 220,
       render: value => <span style={{ fontFamily: "monospace" }}>{value}</span>,
     },
+    hierarchyColumn,
     {
-      title: "Provider",
+      title: "服务商",
       dataIndex: "provider",
       key: "provider",
       render: value => renderProviderBadge(value, providerMap),
@@ -334,7 +359,7 @@ export function buildDomainConfigColumns({
       render: (_, record) => renderDomainGovernance(record),
     },
     {
-      title: "Zone ID",
+      title: "区域 ID",
       dataIndex: "zone_id",
       key: "zone_id",
       render: value =>
@@ -355,13 +380,13 @@ export function buildDomainConfigColumns({
         value ? <span style={{ fontFamily: "monospace", fontSize: 12 }}>{value}</span> : "-",
     },
     {
-      title: "Token",
+      title: "API 令牌",
       key: "cloudflare_token",
       render: (_, record) => {
         if (record.provider !== "cloudflare") return "-";
         return record.cloudflare_api_token_configured
-          ? <Tag color="gold">独立 Token</Tag>
-          : <Tag>全局 Token</Tag>;
+          ? <Tag color="gold">独立令牌</Tag>
+          : <Tag>全局令牌</Tag>;
       },
     },
     {
@@ -422,7 +447,7 @@ export function buildDomainConfigColumns({
                   type="link"
                   size="small"
                   onClick={() => handleSyncMailboxRoutes(record.id)}
-                  disabled={!canSyncMailboxRoutes(record)}
+                  disabled={!canSyncMailboxRoutes(record, statusMap.get(record.domain))}
                   loading={syncing}
                 >
                   同步路由
@@ -450,7 +475,7 @@ export function buildRoutingProfileColumns({
       width: 220,
     },
     {
-      title: "Provider",
+      title: "服务商",
       dataIndex: "provider",
       key: "provider",
       render: value => renderProviderBadge(value, providerMap),

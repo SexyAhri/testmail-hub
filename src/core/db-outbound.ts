@@ -547,9 +547,9 @@ export async function createOutboundTemplate(
     text_template: string;
     variables: string[];
   },
-): Promise<void> {
+): Promise<number> {
   const now = Date.now();
-  await db
+  const result = (await db
     .prepare(
       "INSERT INTO outbound_templates (name, subject_template, text_template, html_template, variables_json, is_enabled, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -564,7 +564,19 @@ export async function createOutboundTemplate(
       now,
       now,
     )
-    .run();
+    .run()) as { meta?: { last_row_id?: number } };
+
+  const insertedId = Number(result?.meta?.last_row_id || 0);
+  if (insertedId > 0) return insertedId;
+
+  const fallbackRow = await db
+    .prepare(
+      "SELECT id FROM outbound_templates WHERE created_by = ? AND name = ? AND created_at = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(input.created_by, input.name, now)
+    .first<DbRow>();
+
+  return numberValue(fallbackRow || {}, "id", 0);
 }
 
 export async function updateOutboundTemplate(
@@ -638,22 +650,35 @@ export async function createOutboundContact(
     note: string;
     tags: string[];
   },
-): Promise<void> {
+): Promise<number> {
   const now = Date.now();
-  await db
+  const normalizedEmail = normalizeEmailAddress(input.email);
+  const result = (await db
     .prepare(
       "INSERT INTO outbound_contacts (name, email, note, tags, is_favorite, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(
       input.name,
-      normalizeEmailAddress(input.email),
+      normalizedEmail,
       input.note,
       jsonStringify(input.tags, "[]"),
       input.is_favorite ? 1 : 0,
       now,
       now,
     )
-    .run();
+    .run()) as { meta?: { last_row_id?: number } };
+
+  const insertedId = Number(result?.meta?.last_row_id || 0);
+  if (insertedId > 0) return insertedId;
+
+  const fallbackRow = await db
+    .prepare(
+      "SELECT id FROM outbound_contacts WHERE email = ? AND created_at = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(normalizedEmail, now)
+    .first<DbRow>();
+
+  return numberValue(fallbackRow || {}, "id", 0);
 }
 
 export async function updateOutboundContact(

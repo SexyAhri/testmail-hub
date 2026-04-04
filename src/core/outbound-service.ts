@@ -20,6 +20,16 @@ interface PersistInput {
   username: string;
 }
 
+export class PersistOutboundSendError extends Error {
+  recordId: number;
+
+  constructor(message: string, recordId: number) {
+    super(message);
+    this.name = "PersistOutboundSendError";
+    this.recordId = recordId;
+  }
+}
+
 export interface PersistOutcome {
   action: "draft" | "scheduled" | "sent";
   record: OutboundEmailRecord | null;
@@ -80,7 +90,7 @@ export async function persistOutboundEmail(
       to: input.payload.to,
       trigger: "manual",
     });
-    throw new Error(message);
+    throw new PersistOutboundSendError(message, recordId);
   }
 }
 

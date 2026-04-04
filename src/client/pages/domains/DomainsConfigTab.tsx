@@ -50,7 +50,14 @@ export function DomainsConfigTab({
         type="info"
         showIcon
         message="域名资产配置"
-        description="这里统一管理域名归属、Provider 能力、路由字段、Catch-all 策略，以及项目 / 环境绑定关系。手动 / 外部托管域名只做资产登记，不做 Cloudflare 同步。"
+        description="这里统一管理域名归属、服务商能力、路由字段、Catch-all 策略，以及项目 / 环境绑定关系。手动 / 外部托管域名只做资产登记，不做 Cloudflare 同步。"
+      />
+
+      <Alert
+        type="info"
+        showIcon
+        message="子域名分组"
+        description="已配置域名会按最近的已注册父域名自动归组。每个子域名依然保持独立资产属性，继续单独管理自己的工作空间绑定、服务商配置、Catch-all 策略和同步开关。"
       />
 
       <DataTable

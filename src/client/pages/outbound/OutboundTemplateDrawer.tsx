@@ -61,6 +61,15 @@ export function OutboundTemplateDrawer({
         </Form.Item>
       </Col>
       <Col span={24}>
+        <Form.Item
+          label="本次操作备注"
+          name="operation_note"
+          extra="这条说明不会写入模板内容，只会进入审计日志。"
+        >
+          <TextArea rows={2} placeholder="例如：新增验证码模板、调整变量字段、停用旧版通知文案" />
+        </Form.Item>
+      </Col>
+      <Col span={24}>
         <Form.Item label="启用模板" name="is_enabled" valuePropName="checked">
           <Switch checkedChildren="启用" unCheckedChildren="停用" />
         </Form.Item>

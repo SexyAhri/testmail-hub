@@ -30,7 +30,7 @@ export async function handleAdminLogin(
     const response = json({
       ok: true,
       user: {
-        display_name: "\u521d\u59cb\u7ba1\u7406\u5458",
+        display_name: "初始管理员",
         role: "owner",
         username: "bootstrap-owner",
       },
@@ -46,7 +46,7 @@ export async function handleAdminLogin(
     await addAuditLog(env.DB, {
       action: "admin.login",
       actor: {
-        display_name: "\u521d\u59cb\u7ba1\u7406\u5458",
+        display_name: "初始管理员",
         role: "owner",
         user_id: "bootstrap-owner",
       },

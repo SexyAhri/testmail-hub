@@ -344,6 +344,7 @@ export interface OutboundEmailPayload {
   html_body?: string;
   id?: number;
   mode?: "draft" | "send";
+  operation_note?: string;
   reply_to?: string;
   scheduled_at?: number | null;
   subject: string;
@@ -371,6 +372,7 @@ export interface OutboundTemplatePayload {
   html_template: string;
   is_enabled: boolean;
   name: string;
+  operation_note?: string;
   subject_template: string;
   text_template: string;
   variables?: string[] | string;
@@ -381,5 +383,6 @@ export interface OutboundContactPayload {
   is_favorite: boolean;
   name: string;
   note: string;
+  operation_note?: string;
   tags?: string[] | string;
 }

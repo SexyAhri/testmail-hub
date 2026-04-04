@@ -38,10 +38,13 @@ import {
 } from "../access-control";
 import {
   buildResourceDeleteAuditDetail,
+  buildResourceUpdateAuditDetail,
+  readAuditOperationNote,
   readRequestAuditOperationNote,
   toOutboundContactAuditSnapshot,
   toOutboundEmailAuditSnapshot,
   toOutboundTemplateAuditSnapshot,
+  withAuditOperationNote,
 } from "../audit";
 import {
   persistOutboundFromHandler,
@@ -183,6 +186,8 @@ export async function handleAdminOutboundEmailsPost(
     actor,
     prepared.settings.provider,
     prepared.data,
+    undefined,
+    prepared.operation_note,
   );
 }
 
@@ -247,11 +252,13 @@ export async function handleAdminOutboundEmailsPut(
     prepared.settings.provider,
     prepared.data,
     id,
+    prepared.operation_note,
   );
 }
 
 export async function handleAdminOutboundEmailSendExisting(
   pathname: string,
+  request: Request,
   db: D1Database,
   env: WorkerEnv,
   actor: AuthSession,
@@ -275,6 +282,11 @@ export async function handleAdminOutboundEmailSendExisting(
   if (existing.status === "sending") {
     return jsonError("email is already sending", 409);
   }
+  const operationNoteValidation = await readRequestAuditOperationNote(request);
+  if (!operationNoteValidation.ok) {
+    return jsonError(operationNoteValidation.error || "invalid JSON body", 400);
+  }
+  const operation_note = operationNoteValidation.operation_note;
   if (!String(env.RESEND_API_KEY || "").trim()) {
     await captureError(
       db,
@@ -317,6 +329,7 @@ export async function handleAdminOutboundEmailSendExisting(
     "resend",
     validation.data,
     id,
+    operation_note,
   );
 }
 
@@ -381,17 +394,35 @@ export async function handleAdminOutboundTemplatesPost(
 
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+  const operationNoteValidation = readAuditOperationNote(parsed.data || {});
+  if (!operationNoteValidation.ok) {
+    return jsonError(operationNoteValidation.error || "invalid JSON body", 400);
+  }
   const validation = validateOutboundTemplateInput(parsed.data || {});
   if (!validation.ok) return jsonError(validation.error, 400);
 
-  await createOutboundTemplate(db, {
+  const id = await createOutboundTemplate(db, {
     ...validation.data,
     created_by: actor.username,
   });
+  const created = await getOutboundTemplateById(db, id);
+  const next = toOutboundTemplateAuditSnapshot(
+    created || {
+      ...validation.data,
+      created_by: actor.username,
+    },
+  );
   await addAuditLog(db, {
     action: "outbound.template.create",
     actor,
-    detail: { ...validation.data },
+    detail: withAuditOperationNote(
+      {
+        id,
+        ...next,
+      },
+      operationNoteValidation.operation_note,
+    ),
+    entity_id: String(id),
     entity_type: "outbound_template",
   });
   return json({ ok: true });
@@ -416,16 +447,43 @@ export async function handleAdminOutboundTemplatesPut(
   if (!Number.isFinite(id)) {
     return jsonError("invalid outbound template id", 400);
   }
+  const existing = await getOutboundTemplateById(db, id);
+  if (!existing) return jsonError("outbound template not found", 404);
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+  const operationNoteValidation = readAuditOperationNote(parsed.data || {});
+  if (!operationNoteValidation.ok) {
+    return jsonError(operationNoteValidation.error || "invalid JSON body", 400);
+  }
   const validation = validateOutboundTemplateInput(parsed.data || {});
   if (!validation.ok) return jsonError(validation.error, 400);
 
+  const previous = toOutboundTemplateAuditSnapshot(existing);
   await updateOutboundTemplate(db, id, validation.data);
+  const latest = await getOutboundTemplateById(db, id);
+  const next = toOutboundTemplateAuditSnapshot(
+    latest || {
+      ...validation.data,
+      created_by: existing.created_by,
+    },
+  );
   await addAuditLog(db, {
     action: "outbound.template.update",
     actor,
-    detail: { id, ...validation.data },
+    detail: buildResourceUpdateAuditDetail(
+      previous,
+      next,
+      [
+        "html_template_length",
+        "is_enabled",
+        "name",
+        "subject_template",
+        "text_template_length",
+        "variables",
+      ],
+      operationNoteValidation.operation_note,
+      { id },
+    ),
     entity_id: String(id),
     entity_type: "outbound_template",
   });
@@ -495,14 +553,27 @@ export async function handleAdminOutboundContactsPost(
 
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+  const operationNoteValidation = readAuditOperationNote(parsed.data || {});
+  if (!operationNoteValidation.ok) {
+    return jsonError(operationNoteValidation.error || "invalid JSON body", 400);
+  }
   const validation = validateOutboundContactInput(parsed.data || {});
   if (!validation.ok) return jsonError(validation.error, 400);
 
-  await createOutboundContact(db, validation.data);
+  const id = await createOutboundContact(db, validation.data);
+  const created = await getOutboundContactById(db, id);
+  const next = toOutboundContactAuditSnapshot(created || validation.data);
   await addAuditLog(db, {
     action: "outbound.contact.create",
     actor,
-    detail: { ...validation.data },
+    detail: withAuditOperationNote(
+      {
+        id,
+        ...next,
+      },
+      operationNoteValidation.operation_note,
+    ),
+    entity_id: String(id),
     entity_type: "outbound_contact",
   });
   return json({ ok: true });
@@ -527,16 +598,31 @@ export async function handleAdminOutboundContactsPut(
   if (!Number.isFinite(id)) {
     return jsonError("invalid outbound contact id", 400);
   }
+  const existing = await getOutboundContactById(db, id);
+  if (!existing) return jsonError("outbound contact not found", 404);
   const parsed = await readJsonBody<Record<string, unknown>>(request);
   if (!parsed.ok) return jsonError(parsed.error || "invalid JSON body", 400);
+  const operationNoteValidation = readAuditOperationNote(parsed.data || {});
+  if (!operationNoteValidation.ok) {
+    return jsonError(operationNoteValidation.error || "invalid JSON body", 400);
+  }
   const validation = validateOutboundContactInput(parsed.data || {});
   if (!validation.ok) return jsonError(validation.error, 400);
 
+  const previous = toOutboundContactAuditSnapshot(existing);
   await updateOutboundContact(db, id, validation.data);
+  const latest = await getOutboundContactById(db, id);
+  const next = toOutboundContactAuditSnapshot(latest || validation.data);
   await addAuditLog(db, {
     action: "outbound.contact.update",
     actor,
-    detail: { id, ...validation.data },
+    detail: buildResourceUpdateAuditDetail(
+      previous,
+      next,
+      ["email", "is_favorite", "name", "note", "tags"],
+      operationNoteValidation.operation_note,
+      { id },
+    ),
     entity_id: String(id),
     entity_type: "outbound_contact",
   });

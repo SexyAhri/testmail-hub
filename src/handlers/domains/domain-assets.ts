@@ -382,6 +382,13 @@ function isCatchAllDrifted(
   );
 }
 
+function isPureCatchAllDomain(
+  mode: CatchAllMode,
+  expectedMailboxRouteTotal: number,
+) {
+  return mode === "enabled" && expectedMailboxRouteTotal === 0;
+}
+
 export async function listDomainAssetStatusRecords(
   db: D1Database,
   env: WorkerEnv,
@@ -502,16 +509,22 @@ export async function listDomainAssetStatusRecords(
             .filter((candidate) => candidate.is_enabled)
             .map((candidate) => candidate.address),
         );
+        const pureCatchAllDomain = isPureCatchAllDomain(
+          effectivePolicy.catch_all_mode,
+          expectedMailboxRoutes.size,
+        );
         let mailbox_route_missing_total = 0;
         let mailbox_route_extra_total = 0;
-        for (const address of expectedMailboxRoutes) {
-          if (!enabledMailboxRoutes.has(address)) {
-            mailbox_route_missing_total += 1;
+        if (!pureCatchAllDomain) {
+          for (const address of expectedMailboxRoutes) {
+            if (!enabledMailboxRoutes.has(address)) {
+              mailbox_route_missing_total += 1;
+            }
           }
-        }
-        for (const address of enabledMailboxRoutes) {
-          if (!expectedMailboxRoutes.has(address)) {
-            mailbox_route_extra_total += 1;
+          for (const address of enabledMailboxRoutes) {
+            if (!expectedMailboxRoutes.has(address)) {
+              mailbox_route_extra_total += 1;
+            }
           }
         }
         const mailboxRouteGoverned = asset
@@ -539,6 +552,7 @@ export async function listDomainAssetStatusRecords(
           email_total: usage?.email_total || 0,
           mailbox_route_drift:
             mailboxRouteGoverned &&
+            !pureCatchAllDomain &&
             (mailbox_route_missing_total > 0 || mailbox_route_extra_total > 0),
           mailbox_route_enabled_total: enabledMailboxRoutes.size,
           mailbox_route_expected_total: expectedMailboxRoutes.size,

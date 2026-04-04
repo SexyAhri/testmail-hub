@@ -61,8 +61,10 @@ test("domain drift repair helpers only allow actionable domains", () => {
   );
   assert.equal(
     canRepairMailboxRouteDrift(asset, {
+      catch_all_mode: "inherit",
       cloudflare_configured: true,
       cloudflare_error: "",
+      mailbox_route_expected_total: 2,
       mailbox_route_extra_total: 0,
       mailbox_route_missing_total: 2,
       mailbox_route_drift: true,
@@ -77,8 +79,10 @@ test("domain drift repair helpers only allow actionable domains", () => {
         provider: "manual",
       },
       {
+        catch_all_mode: "inherit",
         cloudflare_configured: true,
         cloudflare_error: "",
+        mailbox_route_expected_total: 1,
         mailbox_route_extra_total: 0,
         mailbox_route_missing_total: 1,
         mailbox_route_drift: true,
@@ -103,9 +107,11 @@ test("mailbox route mismatch helper and governance blocked filter detect blocked
   };
   const blockedStatus = {
     catch_all_drift: true,
+    catch_all_mode: "enabled" as const,
     cloudflare_configured: true,
     cloudflare_error: "",
     mailbox_route_drift: false,
+    mailbox_route_expected_total: 2,
     mailbox_route_extra_total: 1,
     mailbox_route_missing_total: 2,
   };
@@ -131,16 +137,20 @@ test("matchesDomainHealthFilter classifies healthy and issue states", () => {
 
   const healthyStatus = {
     catch_all_drift: false,
+    catch_all_mode: "enabled" as const,
     cloudflare_configured: true,
     cloudflare_error: "",
+    mailbox_route_expected_total: 1,
     mailbox_route_extra_total: 0,
     mailbox_route_missing_total: 0,
     mailbox_route_drift: false,
   };
   const issueStatus = {
     catch_all_drift: false,
+    catch_all_mode: "inherit" as const,
     cloudflare_configured: false,
     cloudflare_error: "",
+    mailbox_route_expected_total: 1,
     mailbox_route_extra_total: 0,
     mailbox_route_missing_total: 1,
     mailbox_route_drift: true,
@@ -151,6 +161,27 @@ test("matchesDomainHealthFilter classifies healthy and issue states", () => {
   assert.equal(matchesDomainHealthFilter(issueStatus, asset, "issues"), true);
   assert.equal(matchesDomainHealthFilter(issueStatus, asset, "unconfigured"), true);
   assert.equal(matchesDomainHealthFilter(issueStatus, asset, "mailbox_route_drift"), true);
+});
+
+test("pure Catch-all domains do not enter mailbox route drift flow", () => {
+  const asset = {
+    allow_mailbox_route_sync: true,
+    is_enabled: true,
+    provider: "cloudflare",
+  };
+  const pureCatchAllStatus = {
+    catch_all_mode: "enabled" as const,
+    cloudflare_configured: true,
+    cloudflare_error: "",
+    mailbox_route_drift: false,
+    mailbox_route_expected_total: 0,
+    mailbox_route_extra_total: 3,
+    mailbox_route_missing_total: 0,
+  };
+
+  assert.equal(hasMailboxRouteMismatch(pureCatchAllStatus), false);
+  assert.equal(canRepairMailboxRouteDrift(asset, pureCatchAllStatus), false);
+  assert.equal(matchesDomainHealthFilter(pureCatchAllStatus, null, "mailbox_route_drift"), false);
 });
 
 test("domain keyword and scope filters cover asset, status and routing profile views", () => {

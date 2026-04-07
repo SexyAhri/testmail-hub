@@ -2,6 +2,8 @@ import { DeleteOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@a
 import { Button, DatePicker, Input, Select, Space, theme } from "antd";
 import type { ReactNode } from "react";
 
+import { withAlpha } from "../../theme";
+
 const { RangePicker } = DatePicker;
 
 interface SearchToolbarProps {
@@ -48,14 +50,14 @@ export function SearchToolbar({
       style={{
         display: "flex",
         justifyContent: "space-between",
-        alignItems: "center",
+        alignItems: "flex-start",
         gap: 12,
         flexWrap: "wrap",
-        padding: "14px 16px",
-        background: `linear-gradient(135deg, ${token.colorBgContainer} 0%, ${token.colorBgLayout} 100%)`,
-        borderRadius: 12,
+        padding: "12px 14px",
+        background: `linear-gradient(135deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+        borderRadius: 16,
         border: `1px solid ${token.colorBorderSecondary}`,
-        boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+        boxShadow: `0 10px 24px ${withAlpha(token.colorText, 0.05)}`,
       }}
     >
       {hasCustomContent ? (
@@ -112,7 +114,7 @@ export function SearchToolbar({
               size="middle"
               style={{
                 borderRadius: 8,
-                boxShadow: `0 2px 8px ${token.colorPrimary}30`,
+                boxShadow: `0 8px 18px ${withAlpha(token.colorPrimary, 0.18)}`,
                 fontWeight: 500,
               }}
             >

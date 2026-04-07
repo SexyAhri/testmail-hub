@@ -855,7 +855,7 @@ export default {
           return handlers.handleAdminNotificationDeliveryResolve(pathname, env.DB, actor);
         }
         if (/^\/admin\/notifications\/\d+\/test$/.test(pathname) && method === "POST") {
-          return handlers.handleAdminNotificationsTest(pathname, env.DB, actor);
+          return handlers.handleAdminNotificationsTest(request, pathname, env.DB, actor);
         }
         if (pathname.startsWith("/admin/notifications/") && method === "PUT") return handlers.handleAdminNotificationsPut(pathname, request, env.DB, actor);
         if (pathname.startsWith("/admin/notifications/") && method === "DELETE") return handlers.handleAdminNotificationsDelete(pathname, request, env.DB, actor);

@@ -1,12 +1,14 @@
 import { Alert, Button, Popconfirm, Space, Tabs, Tag, Typography } from "antd";
 
 import { BatchActionsBar, DataTable, DetailDrawer, MetricCard, MetricGrid, TypeTag } from "../../components";
+import { useTheme } from "../../providers";
 import type {
   NotificationDeliveriesPayload,
   NotificationDeliveryRecord,
   NotificationEndpointRecord,
 } from "../../types";
 import { formatDateTime } from "../../utils";
+import { withAlpha } from "../../theme";
 import { buildDeliveryColumns } from "./notification-table-columns";
 import {
   DELIVERY_HEALTH_OPTIONS,
@@ -60,6 +62,7 @@ export function NotificationDeliveriesDrawer({
   open,
   selectedCount,
 }: NotificationDeliveriesDrawerProps) {
+  const { palette } = useTheme();
   const deliverySummary = deliveries.summary;
   const deliveryHealth = DELIVERY_HEALTH_OPTIONS[deliverySummary.health_status];
   const deliveryColumns = buildDeliveryColumns({
@@ -86,8 +89,8 @@ export function NotificationDeliveriesDrawer({
               gap: 8,
               padding: 14,
               borderRadius: 12,
-              background: "rgba(22,119,255,0.04)",
-              border: "1px solid rgba(22,119,255,0.12)",
+              background: withAlpha(palette.info, 0.06),
+              border: `1px solid ${withAlpha(palette.info, 0.14)}`,
             }}
           >
             <div>
@@ -148,28 +151,28 @@ export function NotificationDeliveriesDrawer({
               value={deliverySummary.total_deliveries}
               icon={<>DL</>}
               percent={Math.min(100, deliverySummary.total_deliveries * 5)}
-              color="#1677ff"
+              color={palette.info}
             />
             <MetricCard
               title="待处理死信"
               value={deliverySummary.dead_letter_total}
               icon={<>DLQ</>}
               percent={deliverySummary.total_deliveries === 0 ? 0 : Math.round((deliverySummary.dead_letter_total / deliverySummary.total_deliveries) * 100)}
-              color="#ff4d4f"
+              color={palette.error}
             />
             <MetricCard
               title="重试中"
               value={deliverySummary.retrying_total}
               icon={<>RT</>}
               percent={deliverySummary.total_deliveries === 0 ? 0 : Math.round((deliverySummary.retrying_total / deliverySummary.total_deliveries) * 100)}
-              color="#faad14"
+              color={palette.warning}
             />
             <MetricCard
               title="累计尝试"
               value={deliverySummary.total_attempts}
               icon={<>AT</>}
               percent={Math.min(100, deliverySummary.total_attempts * 4)}
-              color="#13c2c2"
+              color={palette.cyan}
             />
           </MetricGrid>
 
@@ -179,14 +182,14 @@ export function NotificationDeliveriesDrawer({
               value={deliveryHealth.label}
               icon={<>HL</>}
               percent={deliveryHealth.percent}
-              color={deliveryHealth.metricColor}
+              color={palette[deliveryHealth.metricTone]}
             />
             <MetricCard
               title="24h 成功率"
               value={formatPercentMetric(deliverySummary.success_rate_24h)}
               icon={<>SR</>}
               percent={deliverySummary.success_rate_24h}
-              color="#1677ff"
+              color={palette.info}
             />
             <MetricCard
               title="24h 平均耗时"
@@ -197,14 +200,14 @@ export function NotificationDeliveriesDrawer({
                   ? 0
                   : Math.max(0, 100 - Math.min(100, Math.round(deliverySummary.avg_duration_ms_24h / 20)))
               }
-              color="#13c2c2"
+              color={palette.cyan}
             />
             <MetricCard
               title="24h 尝试"
               value={deliverySummary.recent_attempts_24h}
               icon={<>24</>}
               percent={Math.min(100, deliverySummary.recent_attempts_24h * 10)}
-              color="#722ed1"
+              color={palette.violet}
             />
           </MetricGrid>
 

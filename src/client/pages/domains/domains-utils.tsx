@@ -1,4 +1,5 @@
-import { Space, Tag } from "antd";
+import { Space, Tag, theme } from "antd";
+import type { ReactNode } from "react";
 
 import {
   domainProviderSupports,
@@ -45,6 +46,34 @@ export interface DomainStatusFocusCard {
   summaryTags: Array<{ color?: string; label: string }>;
   title: string;
   total: number;
+}
+
+function MonoMetaText({
+  children,
+  color,
+}: {
+  children: ReactNode;
+  color?: string;
+}) {
+  const { token } = theme.useToken();
+
+  return (
+    <span
+      style={{
+        color: color || token.colorTextSecondary,
+        fontFamily: "IBM Plex Mono, Consolas, monospace",
+        fontSize: 12,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function MutedText({ children }: { children: ReactNode }) {
+  const { token } = theme.useToken();
+
+  return <span style={{ color: token.colorTextTertiary }}>{children}</span>;
 }
 
 export const EMPTY_CATALOG: WorkspaceCatalog = {
@@ -144,9 +173,7 @@ export function renderCatchAllModeTokens(mode: CatchAllMode, forwardTo: string) 
     <Tag key="mode" color="processing">
       启用转发
     </Tag>,
-    <span key="forward_to" style={{ fontFamily: "monospace", fontSize: 12 }}>
-      {forwardTo || "-"}
-    </span>,
+    <MonoMetaText key="forward_to">{forwardTo || "-"}</MonoMetaText>,
   ];
 }
 
@@ -200,7 +227,7 @@ export function renderRoutingProfileBinding(
         {record.routing_profile_name || `策略 #${record.routing_profile_id}`}
       </Tag>
       {record.routing_profile_slug ? (
-        <span style={{ fontFamily: "monospace", fontSize: 12 }}>{record.routing_profile_slug}</span>
+        <MonoMetaText>{record.routing_profile_slug}</MonoMetaText>
       ) : null}
     </Space>
   );
@@ -247,9 +274,7 @@ export function renderDomainHierarchy(entry?: DomainHierarchyEntry | null) {
           <Tag color="geekblue">{`全部后代 ${entry.totalDescendantCount}`}</Tag>
         ) : null}
       </Space>
-      <span style={{ color: "#595959", fontFamily: "monospace", fontSize: 12 }}>
-        {detailParts.join(" · ")}
-      </span>
+      <MonoMetaText>{detailParts.join(" · ")}</MonoMetaText>
     </Space>
   );
 }
@@ -290,11 +315,9 @@ export function renderActualCatchAllStatus(record: DomainAssetStatusRecord) {
         {record.catch_all_enabled ? "已启用" : "未启用"}
       </Tag>
       {record.catch_all_forward_to_actual ? (
-        <span style={{ fontFamily: "monospace", fontSize: 12 }}>
-          {record.catch_all_forward_to_actual}
-        </span>
+        <MonoMetaText>{record.catch_all_forward_to_actual}</MonoMetaText>
       ) : (
-        <span style={{ color: "#999" }}>-</span>
+        <MutedText>-</MutedText>
       )}
     </Space>
   );
@@ -412,13 +435,6 @@ export function buildGovernanceBlockedStatusSummary(
 
 export function buildDomainSampleList(records: DomainAssetStatusRecord[], max = 3) {
   return records.slice(0, max).map(record => record.domain);
-}
-
-export function getStatusFocusAccentColor(severity: DomainStatusFocusCard["severity"]) {
-  if (severity === "error") return "#cf1322";
-  if (severity === "processing") return "#1677ff";
-  if (severity === "success") return "#389e0d";
-  return "#fa8c16";
 }
 
 export function buildDomainMutationPayload(

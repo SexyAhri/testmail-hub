@@ -1,6 +1,8 @@
 import { Space, Tag, Typography } from "antd";
 
 import { DataTable, DetailDrawer, TypeTag } from "../../components";
+import { useTheme } from "../../providers";
+import { withAlpha } from "../../theme";
 import type {
   NotificationDeliveryAttemptRecord,
   NotificationDeliveryRecord,
@@ -29,6 +31,8 @@ export function NotificationAttemptsDrawer({
   onPageChange,
   open,
 }: NotificationAttemptsDrawerProps) {
+  const { palette } = useTheme();
+
   return (
     <DetailDrawer
       title={activeDelivery ? `尝试明细 · 投递 #${activeDelivery.id}` : "尝试明细"}
@@ -44,8 +48,8 @@ export function NotificationAttemptsDrawer({
               gap: 8,
               padding: 14,
               borderRadius: 12,
-              background: "rgba(22,119,255,0.04)",
-              border: "1px solid rgba(22,119,255,0.12)",
+              background: withAlpha(palette.info, 0.06),
+              border: `1px solid ${withAlpha(palette.info, 0.14)}`,
             }}
           >
             <Space size={[8, 8]} wrap>

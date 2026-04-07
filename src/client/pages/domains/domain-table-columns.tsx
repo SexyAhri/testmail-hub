@@ -1,4 +1,4 @@
-import { Button, Space, Tag } from "antd";
+import { Button, Space, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 
 import { getDomainProviderLabel, domainProviderSupports, type DomainProviderDefinition } from "../../../shared/domain-providers";
@@ -222,7 +222,7 @@ export function buildDomainStatusColumns({
         }
 
         if (record.cloudflare_error) {
-          return <span style={{ color: "#cf1322" }}>{record.cloudflare_error}</span>;
+          return <Typography.Text type="danger">{record.cloudflare_error}</Typography.Text>;
         }
 
         if (!record.cloudflare_configured) {

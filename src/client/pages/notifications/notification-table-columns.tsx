@@ -128,7 +128,9 @@ export function buildEndpointColumns({
             <Button type="link" size="small" onClick={() => onOpenDeliveries(record)}>
               记录
             </Button>
-            <span style={{ color: "#999", fontSize: 12 }}>只读</span>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              只读
+            </Typography.Text>
           </Space>
         ),
     },

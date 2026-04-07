@@ -965,7 +965,7 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
   );
 
   return (
-    <div className="page-tab-stack">
+    <div className="page-tab-stack domains-page-shell">
       <PageHeader
         title="域名资产"
         subtitle="统一管理接入域名、Cloudflare 路由配置，以及项目/环境级工作空间绑定。"
@@ -1029,7 +1029,7 @@ export default function DomainsPage({ currentUser, onDomainsChanged, onUnauthori
 
       <Tabs
         activeKey={activeTab}
-        className="page-section-tabs"
+        className="page-section-tabs domains-page-tabs"
         onChange={value => setActiveTab(value as DomainTabKey)}
         items={[
           {

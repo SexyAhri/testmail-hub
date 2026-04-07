@@ -8,6 +8,48 @@ import { isActorProjectScoped } from "../access-control";
 import { readAuditOperationNote } from "../audit";
 import { validateAccessScopeInput } from "./shared";
 
+function normalizeNotificationCustomHeaders(input: unknown) {
+  const rawItems = Array.isArray(input)
+    ? input
+    : typeof input === "string"
+      ? safeParseJson<unknown[]>(input, [])
+      : [];
+  const reservedNames = new Set([
+    "content-type",
+    "content-length",
+    "x-temp-mail-event",
+    "x-temp-mail-signature",
+  ]);
+  const normalized: Array<{ key: string; value: string }> = [];
+  const seen = new Set<string>();
+
+  for (const item of rawItems || []) {
+    const key = String((item as { key?: unknown })?.key || "").trim();
+    const value = String((item as { value?: unknown })?.value || "").trim();
+    if (!key && !value) continue;
+    if (!key) {
+      return { ok: false as const, error: "custom header key is required" };
+    }
+    if (!/^[A-Za-z0-9-]+$/.test(key)) {
+      return { ok: false as const, error: `invalid custom header key: ${key}` };
+    }
+    if (reservedNames.has(key.toLowerCase())) {
+      return { ok: false as const, error: `custom header key is reserved: ${key}` };
+    }
+    if (seen.has(key.toLowerCase())) {
+      return { ok: false as const, error: `duplicate custom header key: ${key}` };
+    }
+    seen.add(key.toLowerCase());
+    normalized.push({ key, value });
+  }
+
+  if (normalized.length > 20) {
+    return { ok: false as const, error: "custom headers cannot exceed 20 entries" };
+  }
+
+  return { ok: true as const, data: normalized };
+}
+
 export function validateNotificationBody(
   body: Record<string, unknown>,
   actor: AuthSession,
@@ -36,6 +78,7 @@ export function validateNotificationBody(
       {},
     ) || {},
   );
+  const customHeadersValidation = normalizeNotificationCustomHeaders(body.custom_headers);
 
   if (!name) return { ok: false as const, error: "name is required" };
   if (type !== "webhook") {
@@ -49,6 +92,7 @@ export function validateNotificationBody(
   }
   if (!operationNoteValidation.ok) return operationNoteValidation;
   if (!scopeValidation.ok) return scopeValidation;
+  if (!customHeadersValidation.ok) return customHeadersValidation;
   if (events.length === 0) {
     return { ok: false as const, error: "at least one event is required" };
   }
@@ -70,6 +114,7 @@ export function validateNotificationBody(
     data: {
       access_scope: scopeValidation.data.access_scope,
       alert_config,
+      custom_headers: customHeadersValidation.data,
       events: normalizedEvents.values,
       is_enabled,
       name,

@@ -12,6 +12,7 @@ import { encodeBase64Url, isSqliteSchemaError } from "../utils/utils";
 import type {
   D1Database,
   JsonValue,
+  NotificationCustomHeader,
   NotificationDeliveryRecord,
   NotificationDeliveryScope,
   NotificationDeliveryStatus,
@@ -62,6 +63,10 @@ export async function sendEventNotifications(
 export async function sendTestNotification(
   db: D1Database,
   endpoint: NotificationEndpointRecord,
+  input: {
+    event?: NotificationEvent;
+    payload?: JsonValue;
+  } = {},
 ): Promise<void> {
   const scope =
     endpoint.access_scope === "bound"
@@ -70,16 +75,19 @@ export async function sendTestNotification(
           project_ids: endpoint.projects.map(project => project.id),
         }
       : {};
+  const event = input.event || "email.received";
+  const payload = input.payload || {
+    event,
+    source: "testmail-hub",
+    test: true,
+    timestamp: Date.now(),
+  };
 
   await deliverFreshNotification(
     db,
     endpoint,
-    "email.received",
-    {
-      source: "testmail-hub",
-      test: true,
-      timestamp: Date.now(),
-    },
+    event,
+    payload,
     scope,
   );
 }
@@ -213,6 +221,7 @@ async function attemptNotificationDelivery(
       delivery.payload,
       delivery.scope,
       endpoint.secret || "",
+      endpoint.custom_headers || [],
     );
     const attemptedAt = Date.now();
     const durationMs = attemptedAt - startedAt;
@@ -373,7 +382,14 @@ async function deliverWithoutLog(
   scope: NotificationScopeContext,
 ): Promise<void> {
   try {
-    await sendNotification(endpoint.target, event, payload, scope, endpoint.secret || "");
+    await sendNotification(
+      endpoint.target,
+      event,
+      payload,
+      scope,
+      endpoint.secret || "",
+      endpoint.custom_headers || [],
+    );
     try {
       await updateNotificationDelivery(db, endpoint.id, "success", "");
     } catch (error) {
@@ -404,6 +420,7 @@ async function sendNotification(
   payload: JsonValue,
   scope: NotificationScopeContext,
   secret: string,
+  customHeaders: NotificationCustomHeader[],
 ): Promise<number> {
   const body = JSON.stringify({
     event,
@@ -420,6 +437,12 @@ async function sendNotification(
 
   if (secret) {
     headers["X-Temp-Mail-Signature"] = await signBody(body, secret);
+  }
+
+  for (const item of customHeaders) {
+    const key = String(item?.key || "").trim();
+    if (!key) continue;
+    headers[key] = String(item?.value || "");
   }
 
   let response: Response;

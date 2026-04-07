@@ -14,9 +14,10 @@ import {
   retryNotificationDelivery,
   sendTestNotification,
 } from "../../core/notifications";
+import { normalizeNotificationEventValue } from "../../utils/constants";
 import { ADMIN_PAGE_SIZE } from "../../utils/constants";
 import { clampPage, json, jsonError, readJsonBody } from "../../utils/utils";
-import type { AuthSession, D1Database } from "../../server/types";
+import type { AuthSession, D1Database, JsonValue } from "../../server/types";
 import {
   ensureActorCanAccessAnyProject,
   ensureActorCanAccessProject,
@@ -231,6 +232,7 @@ export async function handleAdminNotificationsPut(
       [
         "access_scope",
         "alert_config",
+        "custom_header_keys",
         "events",
         "is_enabled",
         "name",
@@ -303,6 +305,7 @@ export async function handleAdminNotificationsDelete(
 }
 
 export async function handleAdminNotificationsTest(
+  request: Request,
   pathname: string,
   db: D1Database,
   actor: AuthSession,
@@ -337,7 +340,24 @@ export async function handleAdminNotificationsTest(
       403,
     );
   }
-  await sendTestNotification(db, endpoint);
+  const contentLength = Number(request.headers.get("content-length") || "0");
+  const parsed = contentLength > 0
+    ? await readJsonBody<Record<string, JsonValue>>(request)
+    : { ok: true as const, data: {} as Record<string, JsonValue> };
+  if (!parsed.ok) {
+    return jsonError(parsed.error || "invalid JSON body", 400);
+  }
+  const parsedBody = parsed.data || {};
+
+  const requestedEvent = normalizeNotificationEventValue(String(parsedBody.event || "").trim() || "email.received");
+  if (!requestedEvent) {
+    return jsonError("invalid notification test event", 400);
+  }
+
+  await sendTestNotification(db, endpoint, {
+    event: requestedEvent === "*" ? "email.received" : requestedEvent,
+    payload: parsedBody.payload,
+  });
   return json({ ok: true });
 }
 

@@ -5,6 +5,7 @@ import type {
   D1Database,
   JsonValue,
   NotificationAlertConfig,
+  NotificationCustomHeader,
   NotificationEndpointRecord,
   PaginationPayload,
   ProjectBindingRecord,
@@ -75,6 +76,15 @@ function mapNotificationEndpoint(row: DbRow): NotificationEndpointRecord {
       ) || {},
     ),
     created_at: numberValue(row, "created_at", Date.now()),
+    custom_headers: (safeParseJson<NotificationCustomHeader[]>(
+      stringValue(row, "custom_headers_json", "[]"),
+      [],
+    ) || [])
+      .map(item => ({
+        key: String(item?.key || "").trim(),
+        value: String(item?.value || ""),
+      }))
+      .filter(item => item.key.length > 0),
     events: safeParseJson<string[]>(stringValue(row, "events", "[]"), []) || [],
     id: numberValue(row, "id"),
     is_enabled: boolValue(row, "is_enabled", true),
@@ -177,7 +187,7 @@ export async function getNotificationEndpointsPaged(
   const [list, countRow] = await Promise.all([
     db
       .prepare(
-        `SELECT id, name, type, target, secret, events, alert_config_json, access_scope, is_enabled, created_at, updated_at, last_status, last_error, last_sent_at FROM notification_endpoints n${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+        `SELECT id, name, type, target, secret, events, alert_config_json, custom_headers_json, access_scope, is_enabled, created_at, updated_at, last_status, last_error, last_sent_at FROM notification_endpoints n${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       )
       .bind(...params, pageSize, offset)
       .all<DbRow>(),
@@ -211,7 +221,7 @@ export async function getAllNotificationEndpoints(
 ): Promise<NotificationEndpointRecord[]> {
   const result = await db
     .prepare(
-      "SELECT id, name, type, target, secret, events, alert_config_json, access_scope, is_enabled, created_at, updated_at, last_status, last_error, last_sent_at FROM notification_endpoints ORDER BY created_at DESC",
+      "SELECT id, name, type, target, secret, events, alert_config_json, custom_headers_json, access_scope, is_enabled, created_at, updated_at, last_status, last_error, last_sent_at FROM notification_endpoints ORDER BY created_at DESC",
     )
     .all<DbRow>();
   const items = result.results.map(mapNotificationEndpoint);
@@ -231,7 +241,7 @@ export async function getNotificationEndpointById(
 ): Promise<NotificationEndpointRecord | null> {
   const row = await db
     .prepare(
-      "SELECT id, name, type, target, secret, events, alert_config_json, access_scope, is_enabled, created_at, updated_at, last_status, last_error, last_sent_at FROM notification_endpoints WHERE id = ? LIMIT 1",
+      "SELECT id, name, type, target, secret, events, alert_config_json, custom_headers_json, access_scope, is_enabled, created_at, updated_at, last_status, last_error, last_sent_at FROM notification_endpoints WHERE id = ? LIMIT 1",
     )
     .bind(id)
     .first<DbRow>();
@@ -250,6 +260,7 @@ export async function createNotificationEndpoint(
   input: {
     access_scope: AccessScope;
     alert_config: NotificationAlertConfig;
+    custom_headers: NotificationCustomHeader[];
     events: string[];
     is_enabled: boolean;
     name: string;
@@ -262,7 +273,7 @@ export async function createNotificationEndpoint(
   const now = Date.now();
   const result = (await db
     .prepare(
-      "INSERT INTO notification_endpoints (name, type, target, secret, events, alert_config_json, access_scope, is_enabled, created_at, updated_at, last_status, last_error, last_sent_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', NULL)",
+      "INSERT INTO notification_endpoints (name, type, target, secret, events, alert_config_json, custom_headers_json, access_scope, is_enabled, created_at, updated_at, last_status, last_error, last_sent_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', NULL)",
     )
     .bind(
       input.name,
@@ -271,6 +282,7 @@ export async function createNotificationEndpoint(
       input.secret || null,
       jsonStringify(input.events, "[]"),
       jsonStringify(input.alert_config as unknown as JsonValue, "{}"),
+      jsonStringify(input.custom_headers as unknown as JsonValue, "[]"),
       input.access_scope,
       input.is_enabled ? 1 : 0,
       now,
@@ -306,6 +318,7 @@ export async function updateNotificationEndpoint(
   input: {
     access_scope: AccessScope;
     alert_config: NotificationAlertConfig;
+    custom_headers: NotificationCustomHeader[];
     events: string[];
     is_enabled: boolean;
     name: string;
@@ -317,7 +330,7 @@ export async function updateNotificationEndpoint(
 ): Promise<void> {
   await db
     .prepare(
-      "UPDATE notification_endpoints SET name = ?, type = ?, target = ?, secret = ?, events = ?, alert_config_json = ?, access_scope = ?, is_enabled = ?, updated_at = ? WHERE id = ?",
+      "UPDATE notification_endpoints SET name = ?, type = ?, target = ?, secret = ?, events = ?, alert_config_json = ?, custom_headers_json = ?, access_scope = ?, is_enabled = ?, updated_at = ? WHERE id = ?",
     )
     .bind(
       input.name,
@@ -326,6 +339,7 @@ export async function updateNotificationEndpoint(
       input.secret || null,
       jsonStringify(input.events, "[]"),
       jsonStringify(input.alert_config as unknown as JsonValue, "{}"),
+      jsonStringify(input.custom_headers as unknown as JsonValue, "[]"),
       input.access_scope,
       input.is_enabled ? 1 : 0,
       Date.now(),

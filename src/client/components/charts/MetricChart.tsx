@@ -6,6 +6,8 @@ import { CanvasRenderer } from "echarts/renderers";
 import ReactEChartsCore from "echarts-for-react/lib/core";
 import { useMemo } from "react";
 
+import { withAlpha } from "../../theme";
+
 echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
 export interface MetricChartDatum {
@@ -24,7 +26,7 @@ interface MetricChartProps {
 }
 
 export function MetricChart({
-  color = "#1890ff",
+  color,
   data,
   emptyText = "No metrics available",
   height = 200,
@@ -33,6 +35,7 @@ export function MetricChart({
   valueFormatter = "{value}",
 }: MetricChartProps) {
   const { token } = theme.useToken();
+  const accentColor = color || token.colorPrimary;
 
   const option = useMemo(
     () => ({
@@ -68,7 +71,7 @@ export function MetricChart({
           data: data.map(item => item.value),
           smooth: true,
           symbol: "none",
-          lineStyle: { color, width: 2 },
+          lineStyle: { color: accentColor, width: 2 },
           areaStyle: {
             color: {
               type: "linear",
@@ -77,15 +80,15 @@ export function MetricChart({
               x2: 0,
               y2: 1,
               colorStops: [
-                { offset: 0, color: `${color}30` },
-                { offset: 1, color: `${color}05` },
+                { offset: 0, color: withAlpha(accentColor, 0.2) },
+                { offset: 1, color: withAlpha(accentColor, 0.02) },
               ],
             },
           },
         },
       ],
     }),
-    [color, data, max, token, valueFormatter],
+    [accentColor, data, max, token, valueFormatter],
   );
 
   const chart = data.length > 0 ? (

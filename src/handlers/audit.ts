@@ -164,6 +164,7 @@ export function buildAdminUpdateAuditDetail(
 export function toNotificationAuditSnapshot(input: {
   access_scope: AccessScope;
   alert_config: NotificationAlertConfig;
+  custom_headers?: Array<{ key: string; value: string }>;
   events: string[];
   is_enabled: boolean;
   name: string;
@@ -176,6 +177,13 @@ export function toNotificationAuditSnapshot(input: {
   return {
     access_scope: input.access_scope,
     alert_config: normalizeNotificationAlertConfig(input.alert_config),
+    custom_header_keys: Array.from(
+      new Set(
+        (Array.isArray(input.custom_headers) ? input.custom_headers : [])
+          .map(item => String(item?.key || "").trim())
+          .filter(Boolean),
+      ),
+    ).sort((left, right) => left.localeCompare(right)),
     events: normalizeAuditStringList(input.events),
     is_enabled: input.is_enabled,
     name: input.name,

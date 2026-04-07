@@ -26,8 +26,11 @@ export async function removeNotification(id: number, payload?: AuditOperationPay
   return request<{ ok: true }>(`/admin/notifications/${id}`, withOptionalJsonBody("DELETE", payload));
 }
 
-export async function testNotification(id: number) {
-  return request<{ ok: true }>(`/admin/notifications/${id}/test`, { method: "POST" });
+export async function testNotification(id: number, payload?: { event: string; payload: unknown }) {
+  return request<{ ok: true }>(
+    `/admin/notifications/${id}/test`,
+    payload ? withJsonBody("POST", payload) : { method: "POST" },
+  );
 }
 
 export async function getNotificationDeliveries(

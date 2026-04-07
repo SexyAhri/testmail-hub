@@ -9,6 +9,7 @@ import { App, Avatar, Breadcrumb, Dropdown, Layout, Space, Spin, Switch, theme }
 import { useRef } from "react";
 
 import { useTheme } from "../../providers";
+import { withAlpha } from "../../theme";
 
 const { Header: AntHeader } = Layout;
 
@@ -32,7 +33,7 @@ export function Header({
   username = "Admin",
 }: HeaderProps) {
   const switchRef = useRef<HTMLSpanElement>(null);
-  const { themeMode, setThemeMode } = useTheme();
+  const { palette, themeMode, setThemeMode } = useTheme();
   const { token } = theme.useToken();
   const { message, modal } = App.useApp();
 
@@ -49,7 +50,7 @@ export function Header({
       overflow: hidden;
     `;
 
-    const rippleColor = toLight ? "rgba(79, 110, 247, 0.6)" : "rgba(255, 255, 255, 0.5)";
+    const rippleColor = toLight ? withAlpha(palette.info, 0.55) : withAlpha("#ffffff", 0.5);
 
     for (let index = 0; index < 3; index += 1) {
       const ripple = document.createElement("div");

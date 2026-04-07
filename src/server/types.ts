@@ -504,10 +504,16 @@ export interface NotificationAlertConfig {
   success_rate_warning_threshold: number;
 }
 
+export interface NotificationCustomHeader {
+  key: string;
+  value: string;
+}
+
 export interface NotificationEndpointRecord {
   access_scope: AccessScope;
   alert_config: NotificationAlertConfig;
   created_at: number;
+  custom_headers: NotificationCustomHeader[];
   events: string[];
   id: number;
   is_enabled: boolean;

@@ -1,4 +1,4 @@
-import { Alert, Button } from "antd";
+import { Button, Card, theme } from "antd";
 import type { ColumnsType } from "antd/es/table";
 
 import { DataTable } from "../../components";
@@ -21,14 +21,21 @@ export function DomainsRoutingProfilesTab({
   onCreate,
   totalCount,
 }: DomainsRoutingProfilesTabProps) {
+  const { token } = theme.useToken();
+
   return (
     <div className="page-tab-stack">
-      <Alert
-        type="info"
-        showIcon
-        message="独立路由策略中心"
-        description="这里可以沉淀可复用的 Catch-all / 路由策略。域名资产在不做直配覆盖时，会优先继承这里绑定的策略。"
-      />
+      <Card size="small" className="domains-tab-intro-card">
+        <div className="domains-tab-intro-card__eyebrow" style={{ color: token.colorPrimary }}>
+          Reusable Policies
+        </div>
+        <div className="domains-tab-intro-card__title" style={{ color: token.colorTextHeading }}>
+          独立路由策略中心
+        </div>
+        <div className="domains-tab-intro-card__description" style={{ color: token.colorTextSecondary }}>
+          在这里沉淀可复用的 Catch-all / 路由策略。域名资产不做直配覆盖时，会优先继承这里绑定的策略。
+        </div>
+      </Card>
 
       <DataTable
         autoFitViewport

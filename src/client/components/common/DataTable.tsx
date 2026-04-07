@@ -2,6 +2,8 @@ import { Table, theme } from "antd";
 import type { TableProps } from "antd";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
+import { withAlpha } from "../../theme";
+
 interface DataTableProps<T> extends Omit<TableProps<T>, "pagination" | "size" | "title"> {
   autoFitViewport?: boolean;
   autoPinHorizontalEdges?: boolean;
@@ -215,9 +217,9 @@ export function DataTable<T extends object>({
       ref={rootRef}
       style={{
         background: token.colorBgContainer,
-        borderRadius: 12,
+        borderRadius: 16,
         border: `1px solid ${token.colorBorderSecondary}`,
-        boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+        boxShadow: `0 12px 28px ${withAlpha(token.colorText, 0.05)}`,
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
@@ -234,12 +236,12 @@ export function DataTable<T extends object>({
             alignItems: "center",
             flexWrap: "wrap",
             gap: 10,
-            padding: "12px 16px",
+            padding: "12px 14px",
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
-            background: `linear-gradient(to right, ${token.colorBgContainer}, ${token.colorBgLayout})`,
+            background: `linear-gradient(135deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
           }}
         >
-          <span style={{ fontWeight: 600, fontSize: 14 }}>{cardTitle}</span>
+          <span style={{ fontWeight: 700, fontSize: 14, color: token.colorTextHeading }}>{cardTitle}</span>
           {cardExtra}
         </div>
       ) : null}
@@ -248,9 +250,9 @@ export function DataTable<T extends object>({
         <div
           ref={toolbarRef}
           style={{
-            padding: "8px 16px",
+            padding: "10px 14px",
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
-            background: token.colorBgContainer,
+            background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillQuaternary} 100%)`,
           }}
         >
           {cardToolbar}

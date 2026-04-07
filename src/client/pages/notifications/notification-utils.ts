@@ -28,10 +28,10 @@ export const ENDPOINT_STATUS_OPTIONS = {
 };
 
 export const DELIVERY_HEALTH_OPTIONS = {
-  critical: { color: "error", label: "告警", metricColor: "#ff4d4f", percent: 25 },
-  healthy: { color: "success", label: "健康", metricColor: "#52c41a", percent: 100 },
-  idle: { color: "default", label: "空闲", metricColor: "#bfbfbf", percent: 15 },
-  warning: { color: "warning", label: "关注", metricColor: "#faad14", percent: 60 },
+  critical: { color: "error", label: "告警", metricTone: "error", percent: 25 },
+  healthy: { color: "success", label: "健康", metricTone: "success", percent: 100 },
+  idle: { color: "default", label: "空闲", metricTone: "neutral", percent: 15 },
+  warning: { color: "warning", label: "关注", metricTone: "warning", percent: 60 },
 } as const;
 
 export const EMPTY_DELIVERIES: NotificationDeliveriesPayload = {
@@ -71,6 +71,7 @@ export const EMPTY_ATTEMPTS: PaginationPayload<NotificationDeliveryAttemptRecord
 export const INITIAL_VALUES: NotificationMutationPayload = {
   access_scope: "all",
   alert_config: { ...DEFAULT_NOTIFICATION_ALERT_CONFIG },
+  custom_headers: [],
   events: ["email.received"],
   is_enabled: true,
   name: "",
@@ -85,7 +86,7 @@ export function buildDeliveryBulkMessage(
   actionLabel: string,
   result: NotificationDeliveryBulkActionResult,
 ) {
-  const errorSuffix = result.errors[0]?.message ? `，${result.errors[0].message}` : "";
+  const errorSuffix = result.errors[0]?.message ? `：${result.errors[0].message}` : "";
   if (result.failed_count === 0) {
     return `${actionLabel}完成，共处理 ${result.success_count} 条`;
   }
@@ -123,8 +124,40 @@ export function buildNotificationEventOptions() {
   ).map(([category, definitions]) => ({
     label: NOTIFICATION_EVENT_CATEGORY_LABELS[category as keyof typeof NOTIFICATION_EVENT_CATEGORY_LABELS],
     options: definitions.map(definition => ({
-      label: `${definition.label} · ${definition.key}`,
+      label: `${definition.label} 路 ${definition.key}`,
       value: definition.key,
     })),
   }));
+}
+
+export function buildNotificationEventFlatOptions() {
+  return NOTIFICATION_EVENT_DEFINITIONS.map(definition => ({
+    label: `${definition.label} / ${definition.key}`,
+    value: definition.key,
+  }));
+}
+
+export function buildNotificationTestPayloadTemplate(event: string) {
+  const definition = getNotificationEventDefinition(event);
+  return JSON.stringify(
+    {
+      event,
+      meta: {
+        source: "testmail-hub",
+        test: true,
+        timestamp: Date.now(),
+      },
+      sample: definition
+        ? {
+            category: definition.category,
+            description: definition.description,
+            label: definition.label,
+          }
+        : {
+            description: "Custom notification test payload",
+          },
+    },
+    null,
+    2,
+  );
 }

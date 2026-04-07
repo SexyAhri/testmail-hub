@@ -166,7 +166,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ items = buildDefaultSidebarItems(), onNavigate, pathname }: SidebarProps) {
-  const { themeMode } = useTheme();
+  const { palette } = useTheme();
   const [openKeys, setOpenKeys] = useState<string[]>(() => findOpenKeys(items, pathname));
 
   useEffect(() => {
@@ -175,17 +175,15 @@ export function Sidebar({ items = buildDefaultSidebarItems(), onNavigate, pathna
 
   const menuItems = useMemo(() => convertToMenuItems(items), [items]);
   const selectedKey = useMemo(() => findSelectedKey(items, pathname), [items, pathname]);
-  const siderBg = themeMode === "dark" ? "#12141a" : "#1e2a3a";
-
   return (
-    <Sider width={260} style={{ background: siderBg }}>
+    <Sider width={260} style={{ background: palette.sidebarBg }}>
       <div
         style={{
           minHeight: 60,
           display: "flex",
           alignItems: "center",
           padding: "0 18px",
-          borderBottom: `1px solid ${themeMode === "dark" ? "#2d3038" : "rgba(255,255,255,0.08)"}`,
+          borderBottom: `1px solid ${palette.sidebarBorder}`,
         }}
       >
         <BrandLogo iconBoxSize={30} iconSize={14} textSize={15} />

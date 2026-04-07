@@ -29,6 +29,7 @@ import {
   type CurrentUser,
 } from "../../permissions";
 import type {
+  AccessScope,
   NotificationDeliveryAttemptRecord,
   NotificationDeliveryBulkActionResult,
   NotificationDeliveryRecord,
@@ -42,10 +43,14 @@ import { NotificationAttemptsDrawer } from "./NotificationAttemptsDrawer";
 import { buildEndpointColumns } from "./notification-table-columns";
 import { NotificationDeliveriesDrawer } from "./NotificationDeliveriesDrawer";
 import { NotificationFormDrawer } from "./NotificationFormDrawer";
+import { NotificationsFilters } from "./NotificationsFilters";
 import { NotificationsMetrics } from "./NotificationsMetrics";
+import { NotificationTestDrawer } from "./NotificationTestDrawer";
 import {
   buildDeliveryBulkMessage,
+  buildNotificationEventFlatOptions,
   buildNotificationEventOptions,
+  buildNotificationTestPayloadTemplate,
   EMPTY_ATTEMPTS,
   EMPTY_DELIVERIES,
   formatNotificationEventLabel,
@@ -57,16 +62,25 @@ interface NotificationsPageProps {
   onUnauthorized: () => void;
 }
 
+interface NotificationTestFormValues {
+  event: string;
+  payload_json: string;
+}
+
 export default function NotificationsPage({ currentUser, onUnauthorized }: NotificationsPageProps) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<NotificationMutationPayload>();
+  const [testForm] = Form.useForm<NotificationTestFormValues>();
   const watchedAccessScope = Form.useWatch("access_scope", form);
   const [items, setItems] = useState<NotificationEndpointRecord[]>([]);
   const [projects, setProjects] = useState<WorkspaceProjectRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testSending, setTestSending] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<NotificationEndpointRecord | null>(null);
+  const [testDrawerOpen, setTestDrawerOpen] = useState(false);
+  const [testingEndpoint, setTestingEndpoint] = useState<NotificationEndpointRecord | null>(null);
   const [deliveryDrawerOpen, setDeliveryDrawerOpen] = useState(false);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [deliveryReplayId, setDeliveryReplayId] = useState<number | null>(null);
@@ -79,7 +93,11 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
   const [attemptLoading, setAttemptLoading] = useState(false);
   const [deliveries, setDeliveries] = useState(EMPTY_DELIVERIES);
   const [attempts, setAttempts] = useState<PaginationPayload<NotificationDeliveryAttemptRecord>>(EMPTY_ATTEMPTS);
-  const { clearSelection, rowSelection, selectedItems } = useTableSelection(items, "id");
+  const [searchText, setSearchText] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>();
+  const [accessScopeFilter, setAccessScopeFilter] = useState<AccessScope>();
+  const [projectFilter, setProjectFilter] = useState<number>();
+  const [eventFilter, setEventFilter] = useState<string>();
   const {
     clearSelection: clearDeliverySelection,
     rowSelection: deliverySelection,
@@ -156,6 +174,7 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
     form.setFieldsValue({
       ...INITIAL_VALUES,
       access_scope: isProjectScoped ? "bound" : INITIAL_VALUES.access_scope,
+      custom_headers: [],
       operation_note: "",
       project_ids: isProjectScoped ? accessibleProjectIds : [],
     });
@@ -167,6 +186,7 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
     form.setFieldsValue({
       access_scope: record.access_scope,
       alert_config: { ...record.alert_config },
+      custom_headers: record.custom_headers,
       events: record.events,
       is_enabled: record.is_enabled,
       name: record.name,
@@ -177,6 +197,16 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
       type: record.type,
     });
     setDrawerOpen(true);
+  }
+
+  function openTestDrawer(record: NotificationEndpointRecord) {
+    const nextEvent = record.events.find(item => item !== "*") || "email.received";
+    setTestingEndpoint(record);
+    testForm.setFieldsValue({
+      event: nextEvent,
+      payload_json: buildNotificationTestPayloadTemplate(nextEvent),
+    });
+    setTestDrawerOpen(true);
   }
 
   function openDeliveries(record: NotificationEndpointRecord) {
@@ -205,6 +235,12 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
       const payload: NotificationMutationPayload = {
         ...values,
         alert_config: values.alert_config || { ...INITIAL_VALUES.alert_config },
+        custom_headers: (values.custom_headers || [])
+          .map(item => ({
+            key: String(item?.key || "").trim(),
+            value: String(item?.value || "").trim(),
+          }))
+          .filter(item => item.key),
         operation_note: String(values.operation_note || "").trim(),
         project_ids: values.access_scope === "bound" ? values.project_ids || [] : [],
       };
@@ -243,16 +279,36 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
     }
   }
 
-  async function handleTest(record: NotificationEndpointRecord) {
+  async function handleTestSubmit() {
+    if (!testingEndpoint) return;
+
+    setTestSending(true);
     try {
-      await testNotification(record.id);
+      const values = await testForm.validateFields();
+      let payload: unknown;
+      try {
+        payload = JSON.parse(values.payload_json);
+      } catch {
+        message.error("测试 payload 必须是合法 JSON。");
+        return;
+      }
+
+      await testNotification(testingEndpoint.id, {
+        event: values.event,
+        payload,
+      });
       message.success("测试投递已触发");
+      setTestDrawerOpen(false);
       await Promise.all([
         loadData(),
-        activeEndpoint?.id === record.id ? loadDeliveryPage(record.id, 1, deliveryView) : Promise.resolve(),
+        activeEndpoint?.id === testingEndpoint.id
+          ? loadDeliveryPage(testingEndpoint.id, 1, deliveryView)
+          : Promise.resolve(),
       ]);
     } catch (error) {
       handlePageError(error);
+    } finally {
+      setTestSending(false);
     }
   }
 
@@ -393,6 +449,7 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
       updateNotification(item.id, {
         access_scope: item.access_scope,
         alert_config: item.alert_config,
+        custom_headers: item.custom_headers,
         events: item.events,
         is_enabled,
         name: item.name,
@@ -438,6 +495,30 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
   );
 
   const eventOptions = useMemo(() => buildNotificationEventOptions(), []);
+  const eventFlatOptions = useMemo(() => buildNotificationEventFlatOptions(), []);
+  const filteredItems = useMemo(() => {
+    const keyword = searchText.trim().toLowerCase();
+    return items.filter(item => {
+      if (statusFilter !== undefined && item.last_status !== statusFilter) return false;
+      if (accessScopeFilter && item.access_scope !== accessScopeFilter) return false;
+      if (projectFilter && !item.projects.some(project => project.id === projectFilter)) return false;
+      if (eventFilter && !item.events.includes(eventFilter) && !item.events.includes("*")) return false;
+      if (!keyword) return true;
+
+      return [
+        item.name,
+        item.target,
+        item.last_error,
+        item.events.join(", "),
+        item.projects.map(project => project.name).join(", "),
+        item.custom_headers.map(header => header.key).join(", "),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    });
+  }, [accessScopeFilter, eventFilter, items, projectFilter, searchText, statusFilter]);
+  const { clearSelection, rowSelection, selectedItems } = useTableSelection(filteredItems, "id");
 
   const endpointRowSelection = useMemo(
     () => (canWriteNotifications ? {
@@ -465,7 +546,7 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
     onDelete: record => void handleDelete(record),
     onEdit: openEdit,
     onOpenDeliveries: openDeliveries,
-    onTest: record => void handleTest(record),
+    onTest: openTestDrawer,
   });
 
   const enabledCount = items.filter(item => item.is_enabled).length;
@@ -497,9 +578,34 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
         retryingCount={retryingCount}
       />
 
+      <div style={{ marginBottom: 16 }}>
+        <NotificationsFilters
+          accessScopeFilter={accessScopeFilter}
+          canWriteNotifications={canWriteNotifications}
+          eventFilter={eventFilter}
+          eventOptions={eventFlatOptions}
+          onAccessScopeChange={value => setAccessScopeFilter(value)}
+          onCreate={openCreate}
+          onEventChange={value => setEventFilter(value)}
+          onProjectChange={value => setProjectFilter(value)}
+          onReset={() => {
+            setSearchText("");
+            setStatusFilter(undefined);
+            setAccessScopeFilter(undefined);
+            setProjectFilter(undefined);
+            setEventFilter(undefined);
+          }}
+          onSearchChange={setSearchText}
+          onStatusChange={value => setStatusFilter(value)}
+          projectFilter={projectFilter}
+          projectOptions={visibleProjects.map(project => ({ label: project.name, value: project.id }))}
+          searchText={searchText}
+          statusFilter={statusFilter}
+        />
+      </div>
+
       <DataTable
-        cardTitle="通知端点列表"
-        cardExtra={canWriteNotifications ? <Button onClick={openCreate}>新增端点</Button> : undefined}
+        cardTitle={`通知端点列表 (${filteredItems.length}/${items.length})`}
         cardToolbar={canWriteNotifications ? (
           <BatchActionsBar selectedCount={selectedItems.length} onClear={clearSelection}>
             <Button onClick={() => void handleBatchToggle(true)}>
@@ -519,7 +625,7 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
           </BatchActionsBar>
         ) : undefined}
         columns={endpointColumns}
-        dataSource={items}
+        dataSource={filteredItems}
         loading={loading}
         rowKey="id"
         rowSelection={endpointRowSelection}
@@ -538,6 +644,22 @@ export default function NotificationsPage({ currentUser, onUnauthorized }: Notif
           open={drawerOpen}
           visibleProjects={visibleProjects}
           watchedAccessScope={watchedAccessScope}
+        />
+      ) : null}
+
+      {canWriteNotifications && testingEndpoint ? (
+        <NotificationTestDrawer
+          endpointName={testingEndpoint.name}
+          eventOptions={eventFlatOptions}
+          form={testForm}
+          loading={testSending}
+          onClose={() => setTestDrawerOpen(false)}
+          onResetTemplate={() => {
+            const event = String(testForm.getFieldValue("event") || "email.received");
+            testForm.setFieldValue("payload_json", buildNotificationTestPayloadTemplate(event));
+          }}
+          onSubmit={() => void handleTestSubmit()}
+          open={testDrawerOpen}
         />
       ) : null}
 

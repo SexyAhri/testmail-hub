@@ -1,4 +1,5 @@
 import { MetricCard, MetricGrid } from "../../components";
+import { useTheme } from "../../providers";
 
 interface NotificationsMetricsProps {
   enabledCount: number;
@@ -13,6 +14,8 @@ export function NotificationsMetrics({
   itemCount,
   retryingCount,
 }: NotificationsMetricsProps) {
+  const { palette } = useTheme();
+
   return (
     <MetricGrid>
       <MetricCard
@@ -20,28 +23,28 @@ export function NotificationsMetrics({
         value={itemCount}
         icon={<>#</>}
         percent={Math.min(100, itemCount * 10)}
-        color="#1677ff"
+        color={palette.info}
       />
       <MetricCard
         title="启用中"
         value={enabledCount}
         icon={<>ON</>}
         percent={itemCount === 0 ? 0 : Math.round((enabledCount / itemCount) * 100)}
-        color="#52c41a"
+        color={palette.success}
       />
       <MetricCard
         title="等待重试"
         value={retryingCount}
         icon={<>RT</>}
         percent={Math.min(100, retryingCount * 20)}
-        color="#faad14"
+        color={palette.warning}
       />
       <MetricCard
         title="最近失败"
         value={failedCount}
         icon={<>ER</>}
         percent={Math.min(100, failedCount * 20)}
-        color="#ff4d4f"
+        color={palette.error}
       />
     </MetricGrid>
   );

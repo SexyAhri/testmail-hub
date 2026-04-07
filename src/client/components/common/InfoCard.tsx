@@ -1,6 +1,8 @@
 import { Card, theme } from "antd";
 import type { ReactNode } from "react";
 
+import { withAlpha } from "../../theme";
+
 interface InfoCardProps {
   color?: string;
   icon: ReactNode;
@@ -8,8 +10,9 @@ interface InfoCardProps {
   title: string;
 }
 
-export function InfoCard({ color = "#1890ff", icon, items, title }: InfoCardProps) {
+export function InfoCard({ color, icon, items, title }: InfoCardProps) {
   const { token } = theme.useToken();
+  const accentColor = color || token.colorPrimary;
 
   return (
     <Card size="small" style={{ borderRadius: 12, height: "100%" }}>
@@ -19,12 +22,12 @@ export function InfoCard({ color = "#1890ff", icon, items, title }: InfoCardProp
             width: 40,
             height: 40,
             borderRadius: 10,
-            background: `${color}15`,
+            background: withAlpha(accentColor, 0.1),
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             fontSize: 20,
-            color,
+            color: accentColor,
           }}
         >
           {icon}

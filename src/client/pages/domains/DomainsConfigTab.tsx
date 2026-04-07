@@ -1,8 +1,8 @@
 import { DownOutlined, SyncOutlined } from "@ant-design/icons";
-import { Alert, Button, Dropdown, Popconfirm } from "antd";
+import { Button, Card, Dropdown, Popconfirm, theme } from "antd";
 import type { MenuProps } from "antd";
-import type { TableRowSelection } from "antd/es/table/interface";
 import type { ColumnsType } from "antd/es/table";
+import type { TableRowSelection } from "antd/es/table/interface";
 
 import { BatchActionsBar, DataTable } from "../../components";
 import type { DomainAssetRecord } from "../../types";
@@ -44,21 +44,35 @@ export function DomainsConfigTab({
   selectedCount,
   syncing,
 }: DomainsConfigTabProps) {
+  const { token } = theme.useToken();
+
   return (
     <div className="page-tab-stack">
-      <Alert
-        type="info"
-        showIcon
-        message="域名资产配置"
-        description="这里统一管理域名归属、服务商能力、路由字段、Catch-all 策略，以及项目 / 环境绑定关系。手动 / 外部托管域名只做资产登记，不做 Cloudflare 同步。"
-      />
+      <div className="domains-tab-intro-grid">
+        <Card size="small" className="domains-tab-intro-card">
+          <div className="domains-tab-intro-card__eyebrow" style={{ color: token.colorPrimary }}>
+            Governance Surface
+          </div>
+          <div className="domains-tab-intro-card__title" style={{ color: token.colorTextHeading }}>
+            域名资产配置
+          </div>
+          <div className="domains-tab-intro-card__description" style={{ color: token.colorTextSecondary }}>
+            在这里统一管理域名归属、服务商能力、路由字段、Catch-all 策略以及项目/环境绑定关系。
+          </div>
+        </Card>
 
-      <Alert
-        type="info"
-        showIcon
-        message="子域名分组"
-        description="已配置域名会按最近的已注册父域名自动归组。每个子域名依然保持独立资产属性，继续单独管理自己的工作空间绑定、服务商配置、Catch-all 策略和同步开关。"
-      />
+        <Card size="small" className="domains-tab-intro-card">
+          <div className="domains-tab-intro-card__eyebrow" style={{ color: token.colorPrimary }}>
+            Hierarchy Context
+          </div>
+          <div className="domains-tab-intro-card__title" style={{ color: token.colorTextHeading }}>
+            子域名分组
+          </div>
+          <div className="domains-tab-intro-card__description" style={{ color: token.colorTextSecondary }}>
+            已配置域名会按最近的已注册父域名自动归组，每个子域名仍保留独立资产属性和治理开关。
+          </div>
+        </Card>
+      </div>
 
       <DataTable
         autoFitViewport

@@ -1,4 +1,4 @@
-import { Tag } from "antd";
+import { Tag, Typography } from "antd";
 
 import type { ResolvedRetentionPolicy } from "../../types";
 import {
@@ -58,7 +58,7 @@ export function RetentionSummary({
   resolved,
 }: RetentionSummaryProps) {
   if (!hasResolvedRetentionPolicy(resolved)) {
-    return <span style={{ color: "#999" }}>{emptyText}</span>;
+    return <Typography.Text type="secondary">{emptyText}</Typography.Text>;
   }
 
   return (

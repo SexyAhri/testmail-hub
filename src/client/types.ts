@@ -2,6 +2,7 @@ import type {
   AccessScope,
   AdminRole,
   NotificationAlertConfig,
+  NotificationCustomHeader,
   ApiTokenPermission,
   ApiTokenRecord,
   AdminUserRecord,
@@ -60,6 +61,7 @@ export type {
   AccessScope,
   AdminRole,
   NotificationAlertConfig,
+  NotificationCustomHeader,
   ApiTokenPermission,
   ApiTokenRecord,
   AdminUserRecord,
@@ -260,6 +262,7 @@ export interface EmailMetadataPayload {
 export interface NotificationMutationPayload {
   access_scope: AccessScope;
   alert_config: NotificationAlertConfig;
+  custom_headers: NotificationCustomHeader[];
   events: string[];
   is_enabled: boolean;
   name: string;
@@ -268,6 +271,11 @@ export interface NotificationMutationPayload {
   secret: string;
   target: string;
   type: string;
+}
+
+export interface NotificationTestPayload {
+  event: string;
+  payload_json: string;
 }
 
 export interface AdminMutationPayload {

@@ -1,24 +1,31 @@
 import { Card, Progress, theme } from "antd";
 import type { ReactNode } from "react";
 
+import { withAlpha } from "../../theme";
+
 interface MetricCardProps {
   color?: string;
+  description?: ReactNode;
   icon: ReactNode;
   percent?: number;
+  showProgress?: boolean;
   suffix?: string;
   title: string;
   value: string | number;
 }
 
 export function MetricCard({
-  color = "#1890ff",
+  color,
+  description,
   icon,
   percent = 0,
+  showProgress = true,
   suffix,
   title,
   value,
 }: MetricCardProps) {
   const { token } = theme.useToken();
+  const accentColor = color || token.colorPrimary;
 
   return (
     <Card
@@ -34,12 +41,12 @@ export function MetricCard({
             width: 40,
             height: 40,
             borderRadius: 10,
-            background: `${color}15`,
+            background: withAlpha(accentColor, 0.1),
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             fontSize: 20,
-            color,
+            color: accentColor,
           }}
         >
           {icon}
@@ -80,14 +87,29 @@ export function MetricCard({
         ) : null}
       </div>
 
-      <Progress
-        percent={Math.max(0, Math.min(100, percent))}
-        showInfo={false}
-        strokeColor={color}
-        trailColor={token.colorBorderSecondary}
-        style={{ marginTop: 12 }}
-        size="small"
-      />
+      {description ? (
+        <div
+          style={{
+            marginTop: 10,
+            color: token.colorTextTertiary,
+            fontSize: 12,
+            lineHeight: 1.6,
+          }}
+        >
+          {description}
+        </div>
+      ) : null}
+
+      {showProgress ? (
+        <Progress
+          percent={Math.max(0, Math.min(100, percent))}
+          showInfo={false}
+          strokeColor={accentColor}
+          trailColor={token.colorBorderSecondary}
+          style={{ marginTop: 12 }}
+          size="small"
+        />
+      ) : null}
     </Card>
   );
 }

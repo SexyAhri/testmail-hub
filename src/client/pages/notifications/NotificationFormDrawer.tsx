@@ -1,4 +1,5 @@
-import { Col, Form, Input, InputNumber, Select, Switch, Typography } from "antd";
+import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { Button, Col, Form, Input, InputNumber, Select, Space, Switch, Typography } from "antd";
 import type { FormInstance } from "antd";
 
 import { FormDrawer } from "../../components";
@@ -93,6 +94,51 @@ export function NotificationFormDrawer({
         <Form.Item label="签名 Secret" name="secret">
           <Input.Password placeholder="可留空" />
         </Form.Item>
+      </Col>
+      <Col span={24}>
+        <Typography.Text strong>自定义请求头</Typography.Text>
+        <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0 }}>
+          用于补充 `Authorization`、`X-App-Key` 这类 webhook 自定义请求头。系统保留 `Content-Type`、事件头和签名头。
+        </Typography.Paragraph>
+      </Col>
+      <Col span={24}>
+        <Form.List name="custom_headers">
+          {(fields, { add, remove }) => (
+            <div style={{ display: "grid", gap: 12 }}>
+              {fields.map(field => (
+                <Space key={field.key} align="start" style={{ display: "flex" }}>
+                  <Form.Item
+                    {...field}
+                    label={false}
+                    name={[field.name, "key"]}
+                    rules={[{ required: true, message: "请输入请求头名称。" }]}
+                    style={{ minWidth: 220, marginBottom: 0 }}
+                  >
+                    <Input placeholder="Header-Name" />
+                  </Form.Item>
+                  <Form.Item
+                    {...field}
+                    label={false}
+                    name={[field.name, "value"]}
+                    rules={[{ required: true, message: "请输入请求头值。" }]}
+                    style={{ flex: 1, marginBottom: 0 }}
+                  >
+                    <Input placeholder="Header Value" />
+                  </Form.Item>
+                  <Button
+                    type="text"
+                    danger
+                    icon={<MinusCircleOutlined />}
+                    onClick={() => remove(field.name)}
+                  />
+                </Space>
+              ))}
+              <Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ key: "", value: "" })}>
+                添加请求头
+              </Button>
+            </div>
+          )}
+        </Form.List>
       </Col>
       <Col span={24}>
         <Form.Item
